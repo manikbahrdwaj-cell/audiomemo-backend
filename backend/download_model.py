@@ -33,8 +33,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def download_model():
-    """Download and cache the ECAPA-TDNN model using HuggingFace API"""
+    """Download and cache the ECAPA-TDNN model using HuggingFace API with Windows support"""
     from huggingface_hub import snapshot_download
+    
+    # Set Windows-friendly environment variables FIRST
+    os.environ['HF_HUB_DISABLE_SYMLINKS'] = '1'
+    os.environ['HF_HUB_SYMLINK_MODE'] = 'copy'
+    os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+    os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+    os.environ['HF_DATASETS_DISABLE_PROGRESS_BARS'] = '1'
     
     # Get the model directory
     backend_dir = Path(__file__).parent

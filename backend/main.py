@@ -3,6 +3,27 @@ Voice Biometric Authentication API
 FastAPI backend for voice enrollment and verification
 """
 
+# Patch torchaudio compatibility issues BEFORE any imports that use speechbrain
+import torchaudio
+
+if not hasattr(torchaudio, 'set_audio_backend'):
+    def _dummy_set_audio_backend(backend):
+        """Dummy function to satisfy speechbrain compatibility"""
+        pass
+    torchaudio.set_audio_backend = _dummy_set_audio_backend
+
+if not hasattr(torchaudio, 'list_audio_backends'):
+    def _dummy_list_audio_backends():
+        """Dummy function to satisfy speechbrain compatibility"""
+        return ['soundfile']
+    torchaudio.list_audio_backends = _dummy_list_audio_backends
+
+if not hasattr(torchaudio, 'get_audio_backend'):
+    def _dummy_get_audio_backend():
+        """Dummy function to satisfy speechbrain compatibility"""
+        return 'soundfile'
+    torchaudio.get_audio_backend = _dummy_get_audio_backend
+
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel

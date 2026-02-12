@@ -1,405 +1,292 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-Test script for Voice Biometric API
-Tests enrollment and verification endpoints
+Test script for voice enrollment and verification
+Tests the complete workflow: enroll voice -> verify voice
 """
 
 import requests
-import struct
+import time
+import subprocess
 import sys
+import os
 from pathlib import Path
 
-# Add backend to path
-sys.path.insert(0, str(Path(__file__).parent / "backend"))
+# Configuration
+API_BASE_URL = "http://localhost:8000"
+BACKEND_DIR = Path(__file__).parent / "backend"
+TEST_AUDIO_FILE = Path(__file__).parent / "test_voice.wav"
+TEST_PHONE_NUMBER = "1234567890"  # Test phone number
 
-def create_test_wav(filename, duration_ms=2000, sample_rate=16000):
-    """Create a test WAV file"""
-    num_samples = int(sample_rate * duration_ms / 1000)
-    
-    # WAV file parameters
-    num_channels = 1
-    bits_per_sample = 16
-    byte_rate = sample_rate * num_channels * bits_per_sample // 8
-    block_align = num_channels * bits_per_sample // 8
-    
-    # Create silence (all zeros)
-    audio_data = b'\x00' * (num_samples * 2)  # 16-bit samples
-    
-    # Create WAV header
-    wav_header = b'RIFF'
-    file_size = 36 + len(audio_data)
-    wav_header += struct.pack('<I', file_size)
-    wav_header += b'WAVE'
-    
-    # Format subchunk
-    wav_header += b'fmt '
-    wav_header += struct.pack('<I', 16)  # Subchunk1Size
-    wav_header += struct.pack('<H', 1)   # AudioFormat (1 = PCM)
-    wav_header += struct.pack('<H', num_channels)
-    wav_header += struct.pack('<I', sample_rate)
-    wav_header += struct.pack('<I', byte_rate)
-    wav_header += struct.pack('<H', block_align)
-    wav_header += struct.pack('<H', bits_per_sample)
-    
-    # Data subchunk
-    wav_header += b'data'
-    wav_header += struct.pack('<I', len(audio_data))
-    
-    # Write to file
-    with open(filename, 'wb') as f:
-        f.write(wav_header)
-        f.write(audio_data)
-    
-    print("[OK] Created test WAV file: " + filename)
+# Colors for output
+class Colors:
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    END = '\033[0m'
 
-def test_health():
-    """Test the health endpoint"""
-    print("\n" + "="*60)
-    print("TEST 1: Health Check Endpoint")
-    print("="*60)
+def print_section(title):
+    """Print a formatted section title"""
+    print(f"\n{Colors.BLUE}{'='*60}")
+    print(f"{title}")
+    print(f"{'='*60}{Colors.END}\n")
+
+def print_success(message):
+    """Print success message"""
+    print(f"{Colors.GREEN}✓ {message}{Colors.END}")
+
+def print_error(message):
+    """Print error message"""
+    print(f"{Colors.RED}✗ {message}{Colors.END}")
+
+def print_info(message):
+    """Print info message"""
+    print(f"{Colors.YELLOW}→ {message}{Colors.END}")
+
+def wait_for_api(max_retries=30, delay=1):
+    """Wait for API to be ready"""
+    print_info("Waiting for API to be ready...")
     
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(f"{API_BASE_URL}/", timeout=2)
+            if response.status_code == 200:
+                print_success("API is ready!")
+                return True
+        except requests.exceptions.ConnectionError:
+            if attempt < max_retries - 1:
+                print_info(f"Attempt {attempt + 1}/{max_retries}. Retrying in {delay}s...")
+                time.sleep(delay)
+            continue
+    
+    return False
+
+def start_backend_server():
+    """Start the FastAPI backend server"""
+    print_info("Starting backend server...")
+    
+    # Check if server is already running
     try:
-        response = requests.get("http://localhost:8000/", timeout=5)
-        print("Status Code: " + str(response.status_code))
-        print("Response: " + str(response.json()))
+        response = requests.get(f"{API_BASE_URL}/", timeout=2)
         if response.status_code == 200:
-            print("[OK] Health check PASSED")
-            return True
+            print_success("Backend server is already running")
+            return None
+    except requests.exceptions.ConnectionError:
+        pass
+    
+    # Start the server
+    try:
+        # On Windows, start in a new process
+        if sys.platform == "win32":
+            process = subprocess.Popen(
+                ["python", "main.py"],
+                cwd=str(BACKEND_DIR),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
+            )
         else:
-            print("[FAIL] Health check FAILED")
-            return False
+            process = subprocess.Popen(
+                ["python", "main.py"],
+                cwd=str(BACKEND_DIR),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+        
+        print_success("Backend server started (PID: {})".format(process.pid))
+        return process
     except Exception as e:
-        print("[ERROR] Health check ERROR: " + str(e))
+        print_error(f"Failed to start backend server: {e}")
+        return None
+
+def test_enrollment():
+    """Test voice enrollment"""
+    print_section("STEP 1: VOICE ENROLLMENT")
+    
+    if not TEST_AUDIO_FILE.exists():
+        print_error(f"Test audio file not found: {TEST_AUDIO_FILE}")
         return False
-
-def test_enroll(phone_number, wav_file):
-    """Test the enrollment endpoint"""
-    print("\n" + "="*60)
-    print("TEST 2: Enrollment Endpoint")
-    print("="*60)
-    print("Phone Number: " + phone_number)
-    print("WAV File: " + wav_file)
+    
+    print_info(f"Loading audio file: {TEST_AUDIO_FILE}")
+    print_info(f"Phone number: {TEST_PHONE_NUMBER}")
     
     try:
-        with open(wav_file, 'rb') as f:
-            files = {'file': ('voice.wav', f, 'audio/wav')}
-            data = {'phone_number': phone_number}
+        with open(TEST_AUDIO_FILE, 'rb') as f:
+            files = {
+                'file': (TEST_AUDIO_FILE.name, f, 'audio/wav')
+            }
+            data = {
+                'phone_number': TEST_PHONE_NUMBER
+            }
             
+            print_info("Sending enrollment request...")
             response = requests.post(
-                "http://localhost:8000/enroll",
-                data=data,
+                f"{API_BASE_URL}/enroll",
                 files=files,
-                timeout=120
-            )
-        
-        print("Status Code: " + str(response.status_code))
-        print("Response: " + str(response.json()))
-        
-        if response.status_code == 200:
-            print("[OK] Enrollment PASSED")
-            return response.json()
-        else:
-            detail = response.json().get('detail', 'Unknown error')
-            print("[FAIL] Enrollment FAILED: " + str(detail))
-            return None
-            
-    except Exception as e:
-        print("[ERROR] Enrollment ERROR: " + str(e))
-        import traceback
-        traceback.print_exc()
-        return None
-
-def test_check_enrollment(phone_number):
-    """Test the enrollment check endpoint"""
-    print("\n" + "="*60)
-    print("TEST 3: Check Enrollment Status")
-    print("="*60)
-    print("Phone Number: " + phone_number)
-    
-    try:
-        response = requests.get(
-            "http://localhost:8000/check/" + phone_number,
-            timeout=5
-        )
-        
-        print("Status Code: " + str(response.status_code))
-        print("Response: " + str(response.json()))
-        
-        if response.status_code == 200:
-            print("[OK] Check enrollment PASSED")
-            return response.json()
-        else:
-            print("[FAIL] Check enrollment FAILED")
-            return None
-            
-    except Exception as e:
-        print("[ERROR] Check enrollment ERROR: " + str(e))
-        return None
-
-def test_verify(phone_number, wav_file):
-    """Test the verification endpoint"""
-    print("\n" + "="*60)
-    print("TEST 4: Verification Endpoint")
-    print("="*60)
-    print("Phone Number: " + phone_number)
-    print("WAV File: " + wav_file)
-    
-    try:
-        with open(wav_file, 'rb') as f:
-            files = {'file': ('voice.wav', f, 'audio/wav')}
-            data = {'phone_number': phone_number}
-            
-            response = requests.post(
-                "http://localhost:8000/verify",
                 data=data,
-                files=files,
-                timeout=120
+                timeout=60
             )
-        
-        print("Status Code: " + str(response.status_code))
-        print("Response: " + str(response.json()))
         
         if response.status_code == 200:
             result = response.json()
-            sim_score = result['similarity_score']
-            is_match = result['is_match']
-            print("Similarity Score: {:.4f}".format(sim_score))
-            print("Is Match: " + str(is_match))
-            print("[OK] Verification PASSED")
-            return result
-        else:
-            detail = response.json().get('detail', 'Unknown error')
-            print("[FAIL] Verification FAILED: " + str(detail))
-            return None
-            
-    except Exception as e:
-        print("[ERROR] Verification ERROR: " + str(e))
-        import traceback
-        traceback.print_exc()
-        return None
-
-def main():
-    print("\n" + "="*60)
-    print("VOICE BIOMETRIC API TEST SUITE")
-    print("="*60)
-    
-    # Create test WAV file
-    test_wav = "test_voice.wav"
-    create_test_wav(test_wav)
-    
-    phone = "1234567890"
-    
-    # Test health
-    if not test_health():
-        print("\n[CRITICAL] Backend is not responding. Exiting.")
-        return False
-    
-    # Test enrollment
-    enroll_result = test_enroll(phone, test_wav)
-    if not enroll_result:
-        print("\n[ERROR] Enrollment failed. Check MongoDB connection and model loading.")
-        return False
-    
-    # Test check enrollment
-    check_result = test_check_enrollment(phone)
-    if not check_result:
-        print("\n[ERROR] Check enrollment failed.")
-        return False
-    
-    if check_result['enrolled']:
-        print("\n[OK] Phone number " + phone + " is enrolled")
-        
-        # Test verification
-        verify_result = test_verify(phone, test_wav)
-        if verify_result:
-            score = verify_result['similarity_score']
-            print("\n[OK] Verification completed with score: {:.4f}".format(score))
-        else:
-            print("\n[ERROR] Verification failed")
-            return False
-    else:
-        print("\n[ERROR] Phone number " + phone + " is not enrolled")
-        return False
-    
-    print("\n" + "="*60)
-    print("ALL TESTS COMPLETED SUCCESSFULLY")
-    print("="*60)
-    return True
-
-if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1)
-
-
-def test_health():
-    """Test the health endpoint"""
-    print("\n" + "="*60)
-    print("TEST 1: Health Check Endpoint")
-    print("="*60)
-    
-    try:
-        response = requests.get("http://localhost:8000/", timeout=5)
-        print(f"Status Code: {response.status_code}")
-        print(f"Response: {response.json()}")
-        if response.status_code == 200:
-            print("✓ Health check PASSED")
+            print_success(f"Enrollment successful!")
+            print(f"  Response: {result['message']}")
+            print(f"  Phone: {result['phone_number']}")
+            if result.get('vector_id'):
+                print(f"  Vector ID: {result['vector_id']}")
             return True
         else:
-            print("✗ Health check FAILED")
+            print_error(f"Enrollment failed with status {response.status_code}")
+            print(f"  Response: {response.text}")
             return False
+            
     except Exception as e:
-        print(f"✗ Health check ERROR: {e}")
+        print_error(f"Enrollment error: {e}")
         return False
 
-def test_enroll(phone_number, wav_file):
-    """Test the enrollment endpoint"""
-    print("\n" + "="*60)
-    print("TEST 2: Enrollment Endpoint")
-    print("="*60)
-    print(f"Phone Number: {phone_number}")
-    print(f"WAV File: {wav_file}")
+def test_verification():
+    """Test voice verification"""
+    print_section("STEP 2: VOICE VERIFICATION")
+    
+    if not TEST_AUDIO_FILE.exists():
+        print_error(f"Test audio file not found: {TEST_AUDIO_FILE}")
+        return False
+    
+    print_info(f"Verifying with same audio file: {TEST_AUDIO_FILE}")
+    print_info(f"Phone number: {TEST_PHONE_NUMBER}")
     
     try:
-        with open(wav_file, 'rb') as f:
-            files = {'file': ('voice.wav', f, 'audio/wav')}
-            data = {'phone_number': phone_number}
+        with open(TEST_AUDIO_FILE, 'rb') as f:
+            files = {
+                'file': (TEST_AUDIO_FILE.name, f, 'audio/wav')
+            }
+            data = {
+                'phone_number': TEST_PHONE_NUMBER
+            }
             
+            print_info("Sending verification request...")
             response = requests.post(
-                "http://localhost:8000/enroll",
-                data=data,
+                f"{API_BASE_URL}/verify",
                 files=files,
-                timeout=120
-            )
-        
-        print(f"Status Code: {response.status_code}")
-        print(f"Response: {response.json()}")
-        
-        if response.status_code == 200:
-            print("✓ Enrollment PASSED")
-            return response.json()
-        else:
-            print(f"✗ Enrollment FAILED: {response.json().get('detail', 'Unknown error')}")
-            return None
-            
-    except Exception as e:
-        print(f"✗ Enrollment ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-def test_check_enrollment(phone_number):
-    """Test the enrollment check endpoint"""
-    print("\n" + "="*60)
-    print("TEST 3: Check Enrollment Status")
-    print("="*60)
-    print(f"Phone Number: {phone_number}")
-    
-    try:
-        response = requests.get(
-            f"http://localhost:8000/check/{phone_number}",
-            timeout=5
-        )
-        
-        print(f"Status Code: {response.status_code}")
-        print(f"Response: {response.json()}")
-        
-        if response.status_code == 200:
-            print("✓ Check enrollment PASSED")
-            return response.json()
-        else:
-            print(f"✗ Check enrollment FAILED")
-            return None
-            
-    except Exception as e:
-        print(f"✗ Check enrollment ERROR: {e}")
-        return None
-
-def test_verify(phone_number, wav_file):
-    """Test the verification endpoint"""
-    print("\n" + "="*60)
-    print("TEST 4: Verification Endpoint")
-    print("="*60)
-    print(f"Phone Number: {phone_number}")
-    print(f"WAV File: {wav_file}")
-    
-    try:
-        with open(wav_file, 'rb') as f:
-            files = {'file': ('voice.wav', f, 'audio/wav')}
-            data = {'phone_number': phone_number}
-            
-            response = requests.post(
-                "http://localhost:8000/verify",
                 data=data,
-                files=files,
-                timeout=120
+                timeout=60
             )
-        
-        print(f"Status Code: {response.status_code}")
-        print(f"Response: {response.json()}")
         
         if response.status_code == 200:
             result = response.json()
-            print(f"Similarity Score: {result['similarity_score']:.4f}")
-            print(f"Is Match: {result['is_match']}")
-            print("✓ Verification PASSED")
-            return result
+            print_success(f"Verification successful!")
+            print(f"  Phone: {result['phone_number']}")
+            print(f"  Similarity Score: {result['similarity_score']:.4f}")
+            print(f"  Threshold: {result['threshold']:.4f}")
+            print(f"  Match Result: {'✓ MATCH' if result['is_match'] else '✗ NO MATCH'}")
+            
+            if result['is_match']:
+                print_success("Voice verified successfully!")
+                return True
+            else:
+                print_error("Voice does not match enrolled identity")
+                return False
         else:
-            print(f"✗ Verification FAILED: {response.json().get('detail', 'Unknown error')}")
-            return None
+            print_error(f"Verification failed with status {response.status_code}")
+            print(f"  Response: {response.text}")
+            return False
             
     except Exception as e:
-        print(f"✗ Verification ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        print_error(f"Verification error: {e}")
+        return False
+
+def test_check_enrollment():
+    """Test enrollment status check"""
+    print_section("STEP 3: CHECK ENROLLMENT STATUS")
+    
+    print_info(f"Checking enrollment status for: {TEST_PHONE_NUMBER}")
+    
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/check/{TEST_PHONE_NUMBER}",
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            print_success(f"Status check successful!")
+            print(f"  Phone: {result['phone_number']}")
+            print(f"  Enrolled: {'✓ YES' if result['enrolled'] else '✗ NO'}")
+            return result['enrolled']
+        else:
+            print_error(f"Status check failed with status {response.status_code}")
+            print(f"  Response: {response.text}")
+            return False
+            
+    except Exception as e:
+        print_error(f"Status check error: {e}")
+        return False
 
 def main():
-    print("\n" + "="*60)
-    print("VOICE BIOMETRIC API TEST SUITE")
-    print("="*60)
+    """Run all tests"""
+    print_section("VOICE BIOMETRIC API - TEST SUITE")
+    print_info("Starting complete workflow test: Enrollment → Verification → Status Check")
     
-    # Create test WAV file
-    test_wav = "test_voice.wav"
-    create_test_wav(test_wav)
+    server_process = None
     
-    phone = "1234567890"
-    
-    # Test health
-    if not test_health():
-        print("\n✗ Backend is not responding. Exiting.")
-        return False
-    
-    # Test enrollment
-    enroll_result = test_enroll(phone, test_wav)
-    if not enroll_result:
-        print("\n✗ Enrollment failed. Check MongoDB connection.")
-        print("Install MongoDB locally or configure MongoDB Atlas for testing.")
-        return False
-    
-    # Test check enrollment
-    check_result = test_check_enrollment(phone)
-    if not check_result:
-        print("\n✗ Check enrollment failed.")
-        return False
-    
-    if check_result['enrolled']:
-        print(f"✓ Phone number {phone} is enrolled")
+    try:
+        # Start backend server
+        server_process = start_backend_server()
+        time.sleep(2)
         
-        # Test verification
-        verify_result = test_verify(phone, test_wav)
-        if verify_result:
-            print(f"\n✓ Verification completed with score: {verify_result['similarity_score']:.4f}")
-        else:
-            print("\n✗ Verification failed")
+        # Wait for API to be ready
+        if not wait_for_api():
+            print_error("Failed to connect to API after multiple retries")
             return False
-    else:
-        print(f"\n✗ Phone number {phone} is not enrolled")
+        
+        # Run tests
+        print_info("\nRunning test sequence...\n")
+        
+        # Test 1: Health check
+        try:
+            response = requests.get(f"{API_BASE_URL}/", timeout=5)
+            print_success(f"Health check passed: {response.json()['message']}")
+        except Exception as e:
+            print_error(f"Health check failed: {e}")
+            return False
+        
+        # Test 2: Enrollment
+        enrollment_ok = test_enrollment()
+        if not enrollment_ok:
+            return False
+        
+        time.sleep(1)
+        
+        # Test 3: Verification
+        verification_ok = test_verification()
+        if not verification_ok:
+            return False
+        
+        time.sleep(1)
+        
+        # Test 4: Check status
+        status_ok = test_check_enrollment()
+        
+        # Summary
+        print_section("TEST SUMMARY")
+        print_success("✓ Enrollment test passed")
+        print_success("✓ Verification test passed")
+        print_success("✓ Status check test passed")
+        print_success("\n🎉 All tests passed successfully!")
+        
+        return True
+        
+    except KeyboardInterrupt:
+        print_error("\nTests interrupted by user")
         return False
-    
-    print("\n" + "="*60)
-    print("ALL TESTS COMPLETED")
-    print("="*60)
-    return True
+    except Exception as e:
+        print_error(f"Unexpected error during testing: {e}")
+        return False
+    finally:
+        # Keep server running if it was started by us
+        if server_process:
+            print_info("\nBackend server is still running in the new window")
+            print_info("Press Ctrl+C in the backend window to stop it")
 
 if __name__ == "__main__":
     success = main()
