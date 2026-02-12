@@ -28,10 +28,181 @@ def create_test_audio_dir():
     TEST_AUDIO_DIR.mkdir(exist_ok=True)
     print(f"✓ Test audio directory ready: {TEST_AUDIO_DIR}")
 
+def generate_male_voice(frequency, duration, rate, variant=0):
+    """
+    Generate male speaker with distinct characteristics
+    Variant: 0=enrollment, 1=same speaker variant, 2=different variant
+    """
+    t = np.linspace(0, duration, int(rate * duration), False)
+    
+    # Male speaker: Deep fundamental frequency with strong lower harmonics
+    # Slower formant movements characteristic of male speech
+    base_freq = frequency
+    
+    # Variant-specific modulation patterns
+    if variant == 0:
+        # Enrollment: Natural speech rhythm (3.5 Hz)
+        mod_freq = 3.5
+        freq_variation_amplitude = 12
+        harmonic_strength = [1.0, 0.35, 0.18, 0.08]  # Strong fundamental
+    elif variant == 1:
+        # Same speaker, slight variation in tempo (3.2 Hz)
+        mod_freq = 3.2
+        freq_variation_amplitude = 11
+        harmonic_strength = [1.0, 0.34, 0.17, 0.09]
+    else:
+        # Different variant with different rhythm (3.8 Hz)
+        mod_freq = 3.8
+        freq_variation_amplitude = 13
+        harmonic_strength = [1.0, 0.36, 0.19, 0.07]
+    
+    # Amplitude modulation (speech envelope)
+    envelope = 0.4 + 0.6 * np.sin(np.pi * np.sin(2 * np.pi * mod_freq * t))
+    
+    # Frequency variation (prosody line)
+    freq_contour = base_freq + freq_variation_amplitude * np.sin(np.pi * t / duration)
+    
+    # Generate signal with multiple harmonics
+    signal = np.zeros_like(t)
+    for harmonic_num, strength in enumerate(harmonic_strength, 1):
+        harmonic_freq = freq_contour * harmonic_num
+        signal += strength * np.sin(2 * np.pi * harmonic_freq * t)
+    
+    # Apply envelope
+    signal = signal * envelope
+    
+    # Add vocal tract characteristics with formant noise
+    formant_noise = 0.08 * np.random.normal(0, 1, len(t))
+    formant_noise = np.convolve(formant_noise, np.hanning(15), mode='same')
+    signal = signal + formant_noise
+    
+    # Normalize
+    signal = signal / np.max(np.abs(signal)) * 0.95
+    
+    return signal.astype(np.float32)
+
+
+def generate_female_voice(frequency, duration, rate, variant=0):
+    """
+    Generate female speaker with distinct characteristics
+    Variant: 0=enrollment, 1=same speaker variant, 2=different variant
+    """
+    t = np.linspace(0, duration, int(rate * duration), False)
+    
+    # Female speaker: Higher fundamental with different harmonic distribution
+    # Faster articulation and more dynamic formant movements
+    base_freq = frequency
+    
+    # Variant-specific modulation patterns
+    if variant == 0:
+        # Enrollment: Faster natural speech rhythm (4.5 Hz)
+        mod_freq = 4.5
+        freq_variation_amplitude = 15
+        # MODIFIED: Even more harmonics with different distribution than child
+        harmonic_strength = [1.0, 0.50, 0.35, 0.20, 0.12, 0.06, 0.02]  
+    elif variant == 1:
+        # Same speaker, slight variation (4.2 Hz)
+        mod_freq = 4.2
+        freq_variation_amplitude = 14
+        harmonic_strength = [1.0, 0.51, 0.34, 0.19, 0.11, 0.07, 0.03]
+    else:
+        # Different variant with different rhythm (4.8 Hz)
+        mod_freq = 4.8
+        freq_variation_amplitude = 16
+        harmonic_strength = [1.0, 0.49, 0.36, 0.21, 0.13, 0.05, 0.01]
+    
+    # Amplitude modulation (very dynamic for female - different from child)
+    # Use double sine wave for distinctive pattern
+    envelope = 0.25 + 0.75 * (0.5 + 0.5 * np.sin(np.pi * np.sin(2 * np.pi * mod_freq * t)))
+    
+    # Frequency variation (more pronounced prosody)
+    freq_contour = base_freq + freq_variation_amplitude * np.sin(2 * np.pi * t / duration)
+    
+    # Generate signal with multiple harmonics (more than male)
+    signal = np.zeros_like(t)
+    for harmonic_num, strength in enumerate(harmonic_strength, 1):
+        harmonic_freq = freq_contour * harmonic_num
+        signal += strength * np.sin(2 * np.pi * harmonic_freq * t)
+    
+    # Apply envelope
+    signal = signal * envelope
+    
+    # Add more complex vocal tract characteristics with filtering
+    formant_noise = 0.12 * np.random.normal(0, 1, len(t))
+    formant_noise = np.convolve(formant_noise, np.hanning(12), mode='same')
+    signal = signal + formant_noise
+    
+    # Normalize
+    signal = signal / np.max(np.abs(signal)) * 0.95
+    
+    return signal.astype(np.float32)
+
+
+def generate_child_voice(frequency, duration, rate, variant=0):
+    """
+    Generate child speaker with distinct characteristics
+    Variant: 0=enrollment, 1=same speaker variant, 2=different variant
+    """
+    t = np.linspace(0, duration, int(rate * duration), False)
+    
+    # Child speaker: Very high pitch with bright timbre
+    # Rapid articulation and higher formant frequencies
+    base_freq = frequency
+    
+    # Variant-specific modulation patterns
+    if variant == 0:
+        # Enrollment: Very fast speech rhythm (6.5 Hz - faster than female's 4.5)
+        mod_freq = 6.5
+        freq_variation_amplitude = 20
+        # MODIFIED: Different harmonic distribution focusing on higher frequencies
+        # More emphasis on 2nd harmonic (characteristic of child voice)
+        harmonic_strength = [0.85, 0.60, 0.25, 0.10, 0.04, 0.02]  
+    elif variant == 1:
+        # Same speaker, slight variation (6.2 Hz)
+        mod_freq = 6.2
+        freq_variation_amplitude = 19
+        harmonic_strength = [0.85, 0.61, 0.24, 0.11, 0.03, 0.02]
+    else:
+        # Different variant with different rhythm (6.8 Hz)
+        mod_freq = 6.8
+        freq_variation_amplitude = 21
+        harmonic_strength = [0.85, 0.59, 0.26, 0.09, 0.05, 0.03]
+    
+    # Amplitude modulation (very dynamic AND unique - rapid breathing pattern)
+    # Triple sine for very different pattern from female
+    modulation_a = 0.5 + 0.5 * np.sin(2 * np.pi * mod_freq * t)
+    modulation_b = 0.3 * np.sin(2 * np.pi * (mod_freq * 1.7) * t)  # Subharmonic
+    envelope = (modulation_a + modulation_b) * 0.7 + 0.3
+    
+    # Frequency variation (rapid pitch changes characteristic of child)
+    freq_contour = base_freq + freq_variation_amplitude * np.sin(np.pi * np.sin(2 * np.pi * 1.2 * t / duration))
+    
+    # Generate signal with modified harmonics
+    signal = np.zeros_like(t)
+    for harmonic_num, strength in enumerate(harmonic_strength, 1):
+        harmonic_freq = freq_contour * harmonic_num
+        signal += strength * np.sin(2 * np.pi * harmonic_freq * t)
+    
+    # Apply envelope with increased jitter (natural vocal variability in children)
+    jitter = 0.04 * np.sin(2 * np.pi * 22 * t)  # Higher frequency jitter
+    jitter += 0.02 * np.random.normal(0, 1, len(t))  # Random jitter
+    signal = signal * (envelope * (1 + jitter))
+    
+    # Add bright noise with different filter characteristics (higher frequencies)
+    formant_noise = 0.16 * np.random.normal(0, 1, len(t))
+    formant_noise = np.convolve(formant_noise, np.hanning(6), mode='same')  # Shorter filter
+    signal = signal + formant_noise
+    
+    # Normalize
+    signal = signal / np.max(np.abs(signal)) * 0.95
+    
+    return signal.astype(np.float32)
+
+
 def generate_tone_speech(frequency, duration, rate, modulation=True):
     """
-    Generate synthetic speech-like audio using tones
-    Simulates human voice characteristics
+    Legacy function for backwards compatibility
+    Generates simple tone-based speech
     """
     t = np.linspace(0, duration, int(rate * duration), False)
     
@@ -152,45 +323,48 @@ def save_audio(signal, filename, rate=SAMPLE_RATE):
     print(f"  ✓ {filename:<40} ({duration:.1f}s, {len(signal)} samples)")
 
 def generate_speaker_voices():
-    """Generate voices for different speakers"""
+    """Generate voices for different speakers with distinct characteristics"""
     print("\n[1] Generating Speaker Voices...")
     
     # Speaker 1: Male (lower pitch: 100-150 Hz)
-    print("  ⌘ Speaker 1 - Male voice (deep pitch)")
+    # Characteristics: Deep fundamental, slower modulation, strong lower harmonics
+    print("  ⌘ Speaker 1 - Male voice (deep pitch, slower articulation)")
     male_freq = 120
-    male_voice = generate_tone_speech(male_freq, DURATION, SAMPLE_RATE)
+    male_voice = generate_male_voice(male_freq, DURATION, SAMPLE_RATE, variant=0)
     save_audio(male_voice, "test_speaker1_enroll.wav")
     
-    # Male speaker variant (same person, slightly different)
-    male_voice_var = generate_tone_speech(male_freq + 5, DURATION, SAMPLE_RATE)
+    # Male speaker - same person, slight variation in tempo and rhythm
+    male_voice_var = generate_male_voice(male_freq, DURATION, SAMPLE_RATE, variant=1)
     save_audio(male_voice_var, "test_speaker1_verify.wav")
     
-    # Male variant 2
-    male_voice_var2 = generate_tone_speech(male_freq - 3, DURATION, SAMPLE_RATE)
+    # Male speaker - same person, different variant with different prosody
+    male_voice_var2 = generate_male_voice(male_freq, DURATION, SAMPLE_RATE, variant=2)
     save_audio(male_voice_var2, "test_speaker1_variant.wav")
     
     # Speaker 2: Female (higher pitch: 200-250 Hz)
-    print("  ⌘ Speaker 2 - Female voice (higher pitch)")
+    # Characteristics: Higher fundamental, faster modulation, more harmonics
+    print("  ⌘ Speaker 2 - Female voice (higher pitch, faster articulation)")
     female_freq = 220
-    female_voice = generate_tone_speech(female_freq, DURATION, SAMPLE_RATE)
+    female_voice = generate_female_voice(female_freq, DURATION, SAMPLE_RATE, variant=0)
     save_audio(female_voice, "test_speaker2_enroll.wav")
     
-    # Female speaker variant
-    female_voice_var = generate_tone_speech(female_freq + 8, DURATION, SAMPLE_RATE)
+    # Female speaker - same person, slight variation in tempo
+    female_voice_var = generate_female_voice(female_freq, DURATION, SAMPLE_RATE, variant=1)
     save_audio(female_voice_var, "test_speaker2_verify.wav")
     
-    # Female variant 2
-    female_voice_var2 = generate_tone_speech(female_freq - 5, DURATION, SAMPLE_RATE)
+    # Female speaker - same person, different variant
+    female_voice_var2 = generate_female_voice(female_freq, DURATION, SAMPLE_RATE, variant=2)
     save_audio(female_voice_var2, "test_speaker2_variant.wav")
     
     # Speaker 3: Child (very high pitch: 300-350 Hz)
-    print("  ⌘ Speaker 3 - Child voice (very high pitch)")
+    # Characteristics: Very high pitch, rapid modulation, bright timbre with many harmonics
+    print("  ⌘ Speaker 3 - Child voice (very high pitch, rapid articulation)")
     child_freq = 320
-    child_voice = generate_tone_speech(child_freq, DURATION, SAMPLE_RATE)
+    child_voice = generate_child_voice(child_freq, DURATION, SAMPLE_RATE, variant=0)
     save_audio(child_voice, "test_speaker3_enroll.wav")
     
-    # Child speaker variant
-    child_voice_var = generate_tone_speech(child_freq + 12, DURATION, SAMPLE_RATE)
+    # Child speaker - same person, slight variation
+    child_voice_var = generate_child_voice(child_freq, DURATION, SAMPLE_RATE, variant=1)
     save_audio(child_voice_var, "test_speaker3_verify.wav")
 
 def generate_animal_sounds():

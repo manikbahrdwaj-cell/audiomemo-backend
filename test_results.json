@@ -1,6 +1,6 @@
 {
   "test_suite": "Comprehensive Voice Verification Tests",
-  "timestamp": "2026-02-12T14:03:55.113696",
+  "timestamp": "2026-02-12T22:49:00.448755",
   "api_url": "http://localhost:8000",
   "tests": [
     {
@@ -9,10 +9,10 @@
       "status": "PASS",
       "details": {
         "phone": "9876543210",
-        "vector_id": "698d9075ab780be1f3a5386f",
-        "message": "Phone: 9876543210 | Vector ID: 698d9075ab780be1f3a5386f"
+        "vector_id": "698e090f5a7a99599868f41f",
+        "message": "Phone: 9876543210 | Vector ID: 698e090f5a7a99599868f41f"
       },
-      "timestamp": "2026-02-12T14:03:57.445292"
+      "timestamp": "2026-02-12T22:49:02.794370"
     },
     {
       "name": "Speaker_2_Female Enrollment",
@@ -20,10 +20,10 @@
       "status": "PASS",
       "details": {
         "phone": "8765432109",
-        "vector_id": "698d9077ab780be1f3a53870",
-        "message": "Phone: 8765432109 | Vector ID: 698d9077ab780be1f3a53870"
+        "vector_id": "698e09125a7a99599868f420",
+        "message": "Phone: 8765432109 | Vector ID: 698e09125a7a99599868f420"
       },
-      "timestamp": "2026-02-12T14:03:59.778622"
+      "timestamp": "2026-02-12T22:49:05.146038"
     },
     {
       "name": "Speaker_3_Child Enrollment",
@@ -31,10 +31,10 @@
       "status": "PASS",
       "details": {
         "phone": "7654321098",
-        "vector_id": "698d907aab780be1f3a53871",
-        "message": "Phone: 7654321098 | Vector ID: 698d907aab780be1f3a53871"
+        "vector_id": "698e09145a7a99599868f421",
+        "message": "Phone: 7654321098 | Vector ID: 698e09145a7a99599868f421"
       },
-      "timestamp": "2026-02-12T14:04:02.114012"
+      "timestamp": "2026-02-12T22:49:07.482400"
     },
     {
       "name": "Speaker_1_Male - same_speaker",
@@ -43,10 +43,10 @@
       "details": {
         "phone": "9876543210",
         "audio_file": "test_speaker1_verify.wav",
-        "similarity_score": 0.9316165504297149,
+        "similarity_score": 0.9544527473641076,
         "threshold": 0.75
       },
-      "timestamp": "2026-02-12T14:04:04.436246"
+      "timestamp": "2026-02-12T22:49:09.833261"
     },
     {
       "name": "Speaker_1_Male - different_variant",
@@ -55,10 +55,10 @@
       "details": {
         "phone": "9876543210",
         "audio_file": "test_speaker1_variant.wav",
-        "similarity_score": 0.956204656873906,
+        "similarity_score": 0.9625427035105885,
         "threshold": 0.75
       },
-      "timestamp": "2026-02-12T14:04:06.759330"
+      "timestamp": "2026-02-12T22:49:12.194397"
     },
     {
       "name": "Speaker_2_Female - same_speaker",
@@ -67,10 +67,10 @@
       "details": {
         "phone": "8765432109",
         "audio_file": "test_speaker2_verify.wav",
-        "similarity_score": 0.9150794554004923,
+        "similarity_score": 0.9526027056448101,
         "threshold": 0.75
       },
-      "timestamp": "2026-02-12T14:04:09.085213"
+      "timestamp": "2026-02-12T22:49:14.540085"
     },
     {
       "name": "Speaker_2_Female - different_variant",
@@ -79,10 +79,10 @@
       "details": {
         "phone": "8765432109",
         "audio_file": "test_speaker2_variant.wav",
-        "similarity_score": 0.9216846569560745,
+        "similarity_score": 0.9502229348275069,
         "threshold": 0.75
       },
-      "timestamp": "2026-02-12T14:04:11.400045"
+      "timestamp": "2026-02-12T22:49:16.875077"
     },
     {
       "name": "Speaker_3_Child - same_speaker",
@@ -91,34 +91,35 @@
       "details": {
         "phone": "7654321098",
         "audio_file": "test_speaker3_verify.wav",
-        "similarity_score": 0.9628208450918927,
+        "similarity_score": 0.9559120776636405,
         "threshold": 0.75
       },
-      "timestamp": "2026-02-12T14:04:13.731852"
+      "timestamp": "2026-02-12T22:49:19.211578"
     },
     {
       "name": "Speaker_1_Male Audio vs Speaker_2_Female Account",
       "category": "Cross-Speaker Security",
-      "status": "FAIL",
+      "status": "PASS",
       "details": {
         "speaker_a": "Speaker_1_Male",
         "speaker_b": "Speaker_2_Female",
-        "security_issue": true,
-        "error": "Cross-speaker match detected"
+        "similarity_score": 0.6417542409744484,
+        "threshold": 0.75,
+        "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:16.036520"
+      "timestamp": "2026-02-12T22:49:21.563195"
     },
     {
       "name": "Speaker_2_Female Audio vs Speaker_1_Male Account",
       "category": "Cross-Speaker Security",
-      "status": "FAIL",
+      "status": "PASS",
       "details": {
         "speaker_b": "Speaker_2_Female",
         "speaker_a": "Speaker_1_Male",
-        "security_issue": true,
-        "error": "Cross-speaker match detected"
+        "similarity_score": 0.6417542427793278,
+        "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:18.345953"
+      "timestamp": "2026-02-12T22:49:23.888660"
     },
     {
       "name": "Speaker_1_Male Audio vs Speaker_3_Child Account",
@@ -127,11 +128,11 @@
       "details": {
         "speaker_a": "Speaker_1_Male",
         "speaker_b": "Speaker_3_Child",
-        "similarity_score": 0.7230742868491401,
+        "similarity_score": 0.6463066239361016,
         "threshold": 0.75,
         "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:20.672490"
+      "timestamp": "2026-02-12T22:49:26.256042"
     },
     {
       "name": "Speaker_3_Child Audio vs Speaker_1_Male Account",
@@ -140,34 +141,35 @@
       "details": {
         "speaker_b": "Speaker_3_Child",
         "speaker_a": "Speaker_1_Male",
-        "similarity_score": 0.7230742928386118,
+        "similarity_score": 0.6463066203746032,
         "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:22.990473"
+      "timestamp": "2026-02-12T22:49:28.597227"
     },
     {
       "name": "Speaker_2_Female Audio vs Speaker_3_Child Account",
       "category": "Cross-Speaker Security",
-      "status": "FAIL",
+      "status": "PASS",
       "details": {
         "speaker_a": "Speaker_2_Female",
         "speaker_b": "Speaker_3_Child",
-        "security_issue": true,
-        "error": "Cross-speaker match detected"
+        "similarity_score": 0.7424888967522892,
+        "threshold": 0.75,
+        "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:25.304820"
+      "timestamp": "2026-02-12T22:49:30.940706"
     },
     {
       "name": "Speaker_3_Child Audio vs Speaker_2_Female Account",
       "category": "Cross-Speaker Security",
-      "status": "FAIL",
+      "status": "PASS",
       "details": {
         "speaker_b": "Speaker_3_Child",
         "speaker_a": "Speaker_2_Female",
-        "security_issue": true,
-        "error": "Cross-speaker match detected"
+        "similarity_score": 0.7424888877619759,
+        "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:27.621381"
+      "timestamp": "2026-02-12T22:49:33.274002"
     },
     {
       "name": "Edge Case: animal_dog_bark",
@@ -175,10 +177,10 @@
       "status": "PASS",
       "details": {
         "description": "Dog barking sound",
-        "similarity_score": 0.674138751091323,
+        "similarity_score": 0.4880147210018907,
         "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:29.953633"
+      "timestamp": "2026-02-12T22:49:35.631248"
     },
     {
       "name": "Edge Case: animal_cat_meow",
@@ -186,10 +188,10 @@
       "status": "PASS",
       "details": {
         "description": "Cat meowing sound",
-        "similarity_score": 0.7011441165867195,
+        "similarity_score": 0.4939275155387658,
         "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:32.262041"
+      "timestamp": "2026-02-12T22:49:37.967175"
     },
     {
       "name": "Edge Case: ambient_noise",
@@ -197,10 +199,10 @@
       "status": "PASS",
       "details": {
         "description": "Background noise only",
-        "similarity_score": 0.6145471860961316,
+        "similarity_score": 0.6169936232941232,
         "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:34.594044"
+      "timestamp": "2026-02-12T22:49:40.289146"
     },
     {
       "name": "Edge Case: whisper",
@@ -208,10 +210,10 @@
       "status": "PASS",
       "details": {
         "description": "Whispered speech (not normal voice)",
-        "similarity_score": 0.5898331880648984,
+        "similarity_score": 0.6819488610679865,
         "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:36.920212"
+      "timestamp": "2026-02-12T22:49:42.655543"
     },
     {
       "name": "Unenrolled Phone Rejection",
@@ -221,14 +223,14 @@
         "phone": "1111111111",
         "correctly_rejected": true
       },
-      "timestamp": "2026-02-12T14:04:38.999489"
+      "timestamp": "2026-02-12T22:49:44.711819"
     }
   ],
   "summary": {
     "total_tests": 19,
-    "passed": 15,
-    "failed": 4,
+    "passed": 19,
+    "failed": 0,
     "skipped": 0,
-    "success_rate": 78.94736842105263
+    "success_rate": 100.0
   }
 }

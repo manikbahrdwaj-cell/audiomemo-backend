@@ -235,6 +235,57 @@ async def verify_voice(
         )
 
 
+@app.post("/embedding/generate")
+async def generate_chunk_embedding(
+    audio_data: str = Form(..., description="Base64 encoded audio data"),
+    sample_rate: int = Form(16000, description="Sample rate in Hz"),
+    chunk_index: int = Form(0, description="Chunk index for tracking")
+):
+    """
+    Generate embedding for a single audio chunk
+    
+    - Receives base64-encoded audio data
+    - Generates 192-dimensional ECAPA-TDNN embedding
+    - Returns embedding for real-time chunk processing
+    """
+    logger.info(f"Chunk embedding request: chunk_index={chunk_index}, sample_rate={sample_rate}")
+    
+    try:
+        # Decode base64 audio data
+        import base64
+        audio_bytes = base64.b64decode(audio_data)
+        
+        if len(audio_bytes) < 1000:
+            raise HTTPException(
+                status_code=400,
+                detail="Audio chunk too small for embedding"
+            )
+        
+        logger.info(f"Generating embedding for chunk {chunk_index}: {len(audio_bytes)} bytes")
+        
+        # Generate embedding from chunk
+        embedding = generate_embedding(audio_bytes)
+        logger.info(f"Generated chunk embedding {chunk_index} with shape: {embedding.shape}")
+        
+        return {
+            "success": True,
+            "chunk_index": chunk_index,
+            "embedding": embedding.tolist(),
+            "embedding_dimension": len(embedding),
+            "audio_size": len(audio_bytes),
+            "sample_rate": sample_rate
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Embedding generation failed for chunk {chunk_index}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate chunk embedding: {str(e)}"
+        )
+
+
 @app.get("/check/{phone_number}", response_model=CheckResponse)
 async def check_enrollment_status(phone_number: str):
     """
