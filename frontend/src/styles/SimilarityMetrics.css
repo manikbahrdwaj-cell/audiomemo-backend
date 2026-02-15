@@ -1,0 +1,369 @@
+/**
+ * SimilarityMetricsDisplay Styling
+ * Professional UI for displaying comprehensive similarity metrics
+ */
+
+.similarity-metrics-container {
+  width: 100%;
+  padding: 20px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  border-radius: 12px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* Match Status Banner */
+.match-status-banner {
+  margin: -20px -20px 20px -20px;
+  padding: 16px 20px;
+  border-radius: 12px 12px 0 0;
+  font-weight: 600;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.match-status-banner.success {
+  background: linear-gradient(135deg, #34c759 0%, #30b750 100%);
+  color: white;
+}
+
+.match-status-banner.danger {
+  background: linear-gradient(135deg, #ff3b30 0%, #f73426 100%);
+  color: white;
+}
+
+.match-status-banner.warning {
+  background: linear-gradient(135deg, #ff9500 0%, #e68f00 100%);
+  color: white;
+}
+
+.match-status-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 18px;
+}
+
+.match-status-icon {
+  font-size: 28px;
+  font-weight: bold;
+}
+
+.match-status-text {
+  letter-spacing: 2px;
+}
+
+/* Metrics Grid */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.metric-card {
+  background: white;
+  border-radius: 10px;
+  padding: 18px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.metric-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.metric-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.metric-badge {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 55px;
+  text-align: center;
+}
+
+.metric-badge.success {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.metric-badge.warning {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.metric-badge.danger {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+.metric-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Progress Bar */
+.progress-bar-container {
+  width: 100%;
+  height: 8px;
+  background-color: #e9ecef;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-bar.success {
+  background: linear-gradient(90deg, #34c759 0%, #2ecc71 100%);
+}
+
+.progress-bar.warning {
+  background: linear-gradient(90deg, #ff9500 0%, #ffa700 100%);
+}
+
+.progress-bar.danger {
+  background: linear-gradient(90deg, #ff3b30 0%, #ff453a 100%);
+}
+
+.metric-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #333;
+  font-family: 'Courier New', monospace;
+  letter-spacing: 1px;
+}
+
+.metric-threshold,
+.metric-description {
+  font-size: 12px;
+  color: #666;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.metric-indicator {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background-color: #d4edda;
+  color: #155724;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.metric-indicator.danger {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+/* Distance Metrics Section */
+.distance-metrics {
+  background: white;
+  border-radius: 10px;
+  padding: 18px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  margin-bottom: 24px;
+}
+
+.section-title {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 2px solid #f0f0f0;
+  padding-bottom: 12px;
+}
+
+.metrics-table {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.metric-row:last-child {
+  border-bottom: none;
+}
+
+.metric-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+.label-help {
+  font-size: 11px;
+  color: #999;
+  font-style: italic;
+}
+
+.metric-value-container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.metric-value-container .value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #333;
+  font-family: 'Courier New', monospace;
+}
+
+.value-scale {
+  font-size: 10px;
+  color: #ccc;
+  font-weight: 500;
+}
+
+/* Interpretation Guide */
+.interpretation-guide {
+  background: linear-gradient(135deg, #e8f4f8 0%, #f0e8f8 100%);
+  border-radius: 10px;
+  padding: 18px;
+  border-left: 4px solid #007acc;
+}
+
+.guide-list {
+  margin: 12px 0 0 0;
+  padding-left: 20px;
+  list-style-type: none;
+}
+
+.guide-list li {
+  margin-bottom: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #555;
+}
+
+.guide-list li strong {
+  color: #333;
+  font-weight: 600;
+}
+
+.guide-list li:last-child {
+  margin-bottom: 0;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .similarity-metrics-container {
+    padding: 16px;
+  }
+
+  .match-status-banner {
+    margin: -16px -16px 16px -16px;
+  }
+
+  .metrics-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .metric-card {
+    padding: 14px;
+  }
+
+  .metric-value {
+    font-size: 20px;
+  }
+
+  .metric-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .metric-value-container {
+    align-items: flex-start;
+    width: 100%;
+    margin-top: 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  .similarity-metrics-container {
+    padding: 12px;
+  }
+
+  .match-status-content {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .metric-title {
+    font-size: 12px;
+  }
+
+  .metric-badge {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+
+  .metric-value {
+    font-size: 18px;
+  }
+
+  .distance-metrics,
+  .interpretation-guide {
+    padding: 14px;
+  }
+
+  .guide-list {
+    font-size: 12px;
+  }
+}
+
+/* Print Styles */
+@media print {
+  .similarity-metrics-container {
+    background: white;
+    box-shadow: none;
+    border: 1px solid #ddd;
+  }
+
+  .metric-card {
+    page-break-inside: avoid;
+  }
+}

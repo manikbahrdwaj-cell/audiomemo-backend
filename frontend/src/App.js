@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react
 import EnrollmentPage from './components/EnrollmentPage';
 import VerificationPage from './components/VerificationPage';
 import './App.css';
+import './styles/verification-results.css';
 
 function Navigation() {
   const location = useLocation();

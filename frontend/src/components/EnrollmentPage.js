@@ -1,6 +1,9 @@
 import React, { useState, useRef } from 'react';
 import { createAudioRecorder, calculateDuration } from '../utils/audioRecorder';
 import { enrollVoice } from '../services/api';
+import { splitAudioIntoBase64Chunks, getChunkDurationByMode } from '../utils/audioChunkSplitter';
+import ChunkProcessingIndicator from './ChunkProcessingIndicator';
+import { useChunkProgress } from '../hooks/useChunkProgress';
 
 function EnrollmentPage() {
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -11,9 +14,12 @@ function EnrollmentPage() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [chunkProgress, setChunkProgress] = useState(null);
+  const [showChunkProgress, setShowChunkProgress] = useState(false);
   
   const recorderRef = useRef(null);
   const timerRef = useRef(null);
+  const wsRef = useRef(null);
 
   const handlePhoneChange = (e) => {
     const value = e.target.value.replace(/[^\d+\-\s]/g, '');
@@ -77,20 +83,144 @@ function EnrollmentPage() {
     setIsSubmitting(true);
     setError(null);
     setResult(null);
+    setShowChunkProgress(true);
 
     try {
-      const response = await enrollVoice(phoneNumber.trim(), audioBlob);
-      setResult({
-        success: true,
-        message: response.message || 'Voice enrolled successfully!',
-        vectorId: response.vector_id,
+      // Set up WebSocket for real-time progress tracking
+      const ws = new WebSocket(
+        (process.env.REACT_APP_WS_URL || 'ws://localhost:8000') + '/ws/voice'
+      );
+
+      // Store WebSocket reference for progress updates
+      wsRef.current = ws;
+
+      // WebSocket message handler for progress updates
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          
+          if (message.type === 'chunk_progress') {
+            setChunkProgress(message.payload);
+          }
+        } catch (error) {
+          console.error('Error processing WebSocket message:', error);
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+      };
+
+      // Wait for WebSocket to open
+      await new Promise((resolve, reject) => {
+        ws.onopen = resolve;
+        ws.onerror = reject;
+        setTimeout(() => reject(new Error('WebSocket connection timeout')), 5000);
       });
-      setAudioBlob(null);
-      setAudioDuration(0);
-      setPhoneNumber('');
+
+      // Convert audio blob to base64
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64Audio = reader.result.split(',')[1];
+          
+          // Split audio into chunks
+          const audioChunks = splitAudioIntoBase64Chunks(base64Audio);
+          const totalChunks = audioChunks.length;
+          
+          // Enrollment uses 1-second chunks
+          const chunkDurationMs = getChunkDurationByMode('enrollment');
+          console.log(`Splitting audio into ${totalChunks} transmit chunks for enrollment (backend will use ${chunkDurationMs}ms chunks)`);
+          
+          // Send each chunk sequentially
+          for (let i = 0; i < audioChunks.length; i++) {
+            const chunk = audioChunks[i];
+            const isLastChunk = i === audioChunks.length - 1;
+            
+            // Send audio chunk message
+            ws.send(JSON.stringify({
+              type: "audio",
+              chunk_number: i,
+              total_chunks: totalChunks,
+              is_last: isLastChunk,
+              data: chunk
+            }));
+            
+            // Log progress
+            console.log(`Sent chunk ${i + 1}/${totalChunks}`);
+            
+            // Small delay between chunks to avoid overwhelming the connection
+            if (!isLastChunk) {
+              await new Promise(resolve => setTimeout(resolve, 10));
+            }
+          }
+
+          ws.send(JSON.stringify({
+            type: "enroll",
+            phone_number: phoneNumber.trim()
+          }));
+
+          // Listen for enrollment result
+          const result = await new Promise((resolve, reject) => {
+            const messageHandler = (event) => {
+              try {
+                const message = JSON.parse(event.data);
+
+                if (message.type === 'enrollment_success') {
+                  removeMessageHandler();
+                  resolve(message.payload);
+                } else if (message.type === 'error' || message.status === 'error') {
+                  removeMessageHandler();
+                  reject(
+                    new Error(message.payload?.error_message || 'Enrollment failed')
+                  );
+                }
+              } catch (error) {
+                console.error('Error parsing message:', error);
+              }
+            };
+
+            const removeMessageHandler = () => {
+              ws.removeEventListener('message', messageHandler);
+            };
+
+            ws.addEventListener('message', messageHandler);
+            setTimeout(
+              () => {
+                removeMessageHandler();
+                reject(new Error('Enrollment timeout'));
+              },
+              60000
+            ); // 60 second timeout
+          });
+
+          setResult({
+            success: true,
+            message: result?.message || 'Voice enrolled successfully!',
+            vectorId: result?.vector_id,
+          });
+          setAudioBlob(null);
+          setAudioDuration(0);
+          setPhoneNumber('');
+        } catch (error) {
+          setError(error.message || 'Failed to enroll voice. Please try again.');
+        } finally {
+          ws.close();
+          setShowChunkProgress(false);
+          wsRef.current = null;
+        }
+      };
+
+      reader.onerror = () => {
+        setError('Failed to read audio file');
+        setShowChunkProgress(false);
+      };
+
+      reader.readAsDataURL(audioBlob);
     } catch (err) {
-      const errorMessage = err.response?.data?.detail || 'Failed to enroll voice. Please try again.';
+      const errorMessage = err.message || 'Failed to enroll voice. Please try again.';
       setError(errorMessage);
+      setShowChunkProgress(false);
     } finally {
       setIsSubmitting(false);
     }
@@ -133,6 +263,18 @@ function EnrollmentPage() {
 
           {/* Enrollment Card */}
           <div className="bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+            {/* Chunk Processing Indicator */}
+            <ChunkProcessingIndicator
+              isVisible={showChunkProgress}
+              progress={chunkProgress}
+              onComplete={() => {
+                // Progress will be handled by the enrollment result
+              }}
+              onError={(errorMsg) => {
+                setError(errorMsg || 'Processing failed');
+              }}
+            />
+
             <div className="p-8">
               {/* Phone Input */}
               <div className="mb-8">

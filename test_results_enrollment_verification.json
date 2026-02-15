@@ -1,0 +1,99 @@
+{
+  "test_summary": {
+    "total_enrollments": 3,
+    "successful_enrollments": 3,
+    "total_database_checks": 3,
+    "found_in_database": 3,
+    "total_verifications": 3,
+    "successful_matches": 3
+  },
+  "enrollments": [
+    {
+      "success": true,
+      "name": "Speaker 1 (Male)",
+      "phone": "+1-555-0001",
+      "vector_id": "6990b4f75a7a99599868f459"
+    },
+    {
+      "success": true,
+      "name": "Speaker 2 (Female)",
+      "phone": "+1-555-0002",
+      "vector_id": "6990b4f95a7a99599868f45a"
+    },
+    {
+      "success": true,
+      "name": "Speaker 3 (Child)",
+      "phone": "+1-555-0003",
+      "vector_id": "6990b4fb5a7a99599868f45b"
+    }
+  ],
+  "database_checks": [
+    {
+      "found": true,
+      "name": "Speaker 1 (Male)",
+      "phone": "+1-555-0001",
+      "dimension": 6,
+      "mongo_id": "6990b4f75a7a99599868f459"
+    },
+    {
+      "found": true,
+      "name": "Speaker 2 (Female)",
+      "phone": "+1-555-0002",
+      "dimension": 6,
+      "mongo_id": "6990b4f95a7a99599868f45a"
+    },
+    {
+      "found": true,
+      "name": "Speaker 3 (Child)",
+      "phone": "+1-555-0003",
+      "dimension": 6,
+      "mongo_id": "6990b4fb5a7a99599868f45b"
+    }
+  ],
+  "verifications": [
+    {
+      "success": true,
+      "name": "Speaker 1 (Male)",
+      "phone": "+1-555-0001",
+      "is_match": true,
+      "similarity_score": 0.9316165504297149,
+      "threshold": 0.75
+    },
+    {
+      "success": true,
+      "name": "Speaker 2 (Female)",
+      "phone": "+1-555-0002",
+      "is_match": true,
+      "similarity_score": 0.9150794554004923,
+      "threshold": 0.75
+    },
+    {
+      "success": true,
+      "name": "Speaker 3 (Child)",
+      "phone": "+1-555-0003",
+      "is_match": true,
+      "similarity_score": 0.9628208450918927,
+      "threshold": 0.75
+    }
+  ],
+  "similarity_scores": [
+    {
+      "subject_key": "1",
+      "name": "Speaker 1 (Male)",
+      "phone": "+1-555-0001",
+      "score": 0.0
+    },
+    {
+      "subject_key": "2",
+      "name": "Speaker 2 (Female)",
+      "phone": "+1-555-0002",
+      "score": 0.0
+    },
+    {
+      "subject_key": "3",
+      "name": "Speaker 3 (Child)",
+      "phone": "+1-555-0003",
+      "score": 0.0
+    }
+  ]
+}

@@ -1,6 +1,9 @@
 import React, { useState, useRef } from 'react';
 import { createAudioRecorder, calculateDuration } from '../utils/audioRecorder';
 import { verifyVoice, checkEnrollment } from '../services/api';
+import { splitAudioIntoBase64Chunks, getChunkDurationByMode } from '../utils/audioChunkSplitter';
+import ChunkProcessingIndicator from './ChunkProcessingIndicator';
+import VerificationResultsDisplay from './VerificationResultsDisplay';
 
 function VerificationPage() {
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -14,9 +17,12 @@ function VerificationPage() {
   const [error, setError] = useState(null);
   const [threshold, setThreshold] = useState(0.75);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [chunkProgress, setChunkProgress] = useState(null);
+  const [showChunkProgress, setShowChunkProgress] = useState(false);
   
   const recorderRef = useRef(null);
   const timerRef = useRef(null);
+  const wsRef = useRef(null);
 
   const handlePhoneChange = (e) => {
     const value = e.target.value.replace(/[^\d+\-\s]/g, '');
@@ -107,21 +113,182 @@ function VerificationPage() {
     setIsVerifying(true);
     setError(null);
     setVerificationResult(null);
+    setShowChunkProgress(true);
 
     try {
-      const response = await verifyVoice(phoneNumber.trim(), audioBlob);
-      const score = response.similarity_score;
-      const isMatch = score >= threshold;
+      // Set up WebSocket for real-time progress tracking
+      const ws = new WebSocket(
+        (process.env.REACT_APP_WS_URL || 'ws://localhost:8000') + '/ws/voice'
+      );
 
-      setVerificationResult({
-        score: score,
-        isMatch: isMatch,
-        phoneNumber: phoneNumber.trim(),
-        threshold: threshold,
+      wsRef.current = ws;
+      let verificationResultReceived = false;
+
+      // Unified WebSocket message handler
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+
+          if (message.type === 'chunk_progress') {
+            setChunkProgress(message.payload);
+          }
+
+          if (message.type === 'error' || message.status === 'error') {
+            setError(message.message || message.payload?.error_message || "Verification failed");
+            setShowChunkProgress(false);
+          }
+        } catch (error) {
+          console.error('Error processing WebSocket message:', error);
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setError('WebSocket connection error');
+        setShowChunkProgress(false);
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket closed');
+        if (!verificationResultReceived) {
+          setError('Connection lost during verification');
+          setShowChunkProgress(false);
+        }
+      };
+
+      // Wait for WebSocket to open
+      await new Promise((resolve, reject) => {
+        ws.onopen = resolve;
+        setTimeout(() => reject(new Error('WebSocket connection timeout')), 5000);
       });
+
+      // Convert audio blob to base64
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64Audio = reader.result.split(',')[1];
+
+          // Split audio into chunks
+          const audioChunks = splitAudioIntoBase64Chunks(base64Audio);
+          const totalChunks = audioChunks.length;
+          
+          // Verification uses 5-second chunks
+          const chunkDurationMs = getChunkDurationByMode('verification');
+          console.log(`Splitting audio into ${totalChunks} transmit chunks for verification (backend will use ${chunkDurationMs}ms chunks)`);
+          
+          // Send each chunk sequentially
+          for (let i = 0; i < audioChunks.length; i++) {
+            const chunk = audioChunks[i];
+            const isLastChunk = i === audioChunks.length - 1;
+            
+            // Send audio chunk message
+            ws.send(JSON.stringify({
+              type: "audio",
+              chunk_number: i,
+              total_chunks: totalChunks,
+              is_last: isLastChunk,
+              data: chunk
+            }));
+            
+            // Log progress
+            console.log(`Sent chunk ${i + 1}/${totalChunks}`);
+            
+            // Small delay between chunks to avoid overwhelming the connection
+            if (!isLastChunk) {
+              await new Promise(resolve => setTimeout(resolve, 10));
+            }
+          }
+
+          ws.send(JSON.stringify({
+            type: "verify",
+            phone_number: phoneNumber.trim()
+          }));
+
+          // Listen for verification result
+          const result = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              reject(new Error('Verification timeout'));
+            }, 60000); // 60 second timeout
+
+            const originalOnMessage = ws.onmessage;
+            ws.onmessage = (event) => {
+              try {
+                const message = JSON.parse(event.data);
+                console.log('WebSocket message received:', message);
+
+                if (message.type === 'verification_result') {
+                  clearTimeout(timeout);
+                  verificationResultReceived = true;
+                  console.log('Verification result payload:', message.payload);
+                  resolve(message);
+                  return;
+                }
+
+                if (message.type === 'error' || message.status === 'error') {
+                  clearTimeout(timeout);
+                  console.error('Verification error:', message);
+                  reject(
+                    new Error(message.payload?.error_message || message.message || 'Verification failed')
+                  );
+                  return;
+                }
+
+                // Call original handler for chunk_progress
+                if (originalOnMessage) {
+                  originalOnMessage.call(ws, event);
+                }
+              } catch (error) {
+                console.error('Error parsing message:', error);
+              }
+            };
+          });
+
+          console.log('Result received:', result);
+          
+
+          
+          if (!result) {
+            throw new Error("Invalid verification response structure");
+          }
+
+          const score = Number(result?.data?.similarity_score ?? 0);
+
+          console.log("Extracted Score:", score);
+          const isMatch = score >= threshold;
+
+          setVerificationResult({
+            score: score,
+            isMatch: isMatch,
+            phoneNumber: phoneNumber.trim(),
+            threshold: threshold,
+          });
+        } catch (error) {
+          setError(error?.message || 'Failed to verify voice. Please try again.');
+        } finally {
+          setShowChunkProgress(false);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.close();
+          }
+          wsRef.current = null;
+        }
+      };
+
+      reader.onerror = () => {
+        setError('Failed to read audio file');
+        setShowChunkProgress(false);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+      };
+
+      reader.readAsDataURL(audioBlob);
     } catch (err) {
-      const errorMessage = err.response?.data?.detail || 'Failed to verify voice. Please try again.';
+      const errorMessage = err.message || 'Failed to verify voice. Please try again.';
       setError(errorMessage);
+      setShowChunkProgress(false);
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.close();
+      }
     } finally {
       setIsVerifying(false);
     }
@@ -270,122 +437,26 @@ function VerificationPage() {
         {/* Right Side: Analysis & Result Zone */}
         <section className="w-3/5 flex flex-col gap-6 overflow-y-auto">
           <div className="bg-white dark:bg-slate-900 p-8 rounded-xl border border-primary/10 shadow-sm flex flex-col h-full">
-            <div className="flex justify-between items-start mb-10">
-              <div>
-                <h2 className="text-lg font-bold text-slate-800 dark:text-white">Identity Match Analysis</h2>
-                <p className="text-sm text-slate-500">Comparative evaluation of live sample vs stored template</p>
-              </div>
-              {verificationResult && (
-                <div className={`px-4 py-1.5 rounded-full text-xs font-bold flex items-center gap-2 ${
-                  verificationResult.isMatch
-                    ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
-                    : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
-                }`}>
-                  <span className="material-icons text-[16px]">{verificationResult.isMatch ? 'verified' : 'block'}</span>
-                  {verificationResult.isMatch ? 'VERIFIED' : 'REJECTED'}
-                </div>
-              )}
-            </div>
-
-            {verificationResult ? (
-              <div className="grid grid-cols-2 gap-12 flex-grow content-start">
-                {/* Info Card */}
-                <div className="space-y-6">
-                  <div className="p-4 bg-background-light dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700">
-                    <h3 className="text-xs font-bold text-slate-400 uppercase mb-4 tracking-widest">Target Identity</h3>
-                    <div>
-                      <p className="font-bold text-slate-800 dark:text-slate-100">{verificationResult.phoneNumber}</p>
-                      <p className="text-xs text-slate-500 mt-1">Phone Number</p>
-                    </div>
-                  </div>
-                  <div className="p-4 bg-background-light dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700">
-                    <h3 className="text-xs font-bold text-slate-400 uppercase mb-3 tracking-widest">Signal Metrics</h3>
-                    <div className="space-y-3">
-                      <div>
-                        <div className="flex justify-between text-[10px] uppercase font-bold text-slate-400 mb-1">
-                          <span>Signal Quality</span>
-                          <span>94%</span>
-                        </div>
-                        <div className="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                          <div className="h-full bg-primary" style={{width: '94%'}}></div>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="flex justify-between text-[10px] uppercase font-bold text-slate-400 mb-1">
-                          <span>Noise Floor</span>
-                          <span>-52 dB</span>
-                        </div>
-                        <div className="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                          <div className="h-full bg-emerald-500" style={{width: '25%'}}></div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Score Display */}
-                <div className="flex flex-col items-center justify-center gap-6">
-                  <div className="relative w-64 h-64 flex items-center justify-center">
-                    <svg className="w-full h-full -rotate-90 transform" viewBox="0 0 100 100">
-                      <circle
-                        className="text-slate-100 dark:text-slate-800"
-                        cx="50" cy="50" fill="none" r="45"
-                        stroke="currentColor" strokeWidth="8"
-                      ></circle>
-                      <circle
-                        className={verificationResult.isMatch ? 'text-emerald-500' : 'text-red-500'}
-                        cx="50" cy="50" fill="none" r="45"
-                        stroke="currentColor"
-                        strokeDasharray="282.7"
-                        strokeDashoffset={282.7 * (1 - verificationResult.score)}
-                        strokeLinecap="round"
-                        strokeWidth="8"
-                      ></circle>
-                    </svg>
-                    <div className="absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Match Score</span>
-                      <span className={`text-6xl font-black tabular-nums ${verificationResult.isMatch ? 'text-emerald-500' : 'text-red-500'}`}>
-                        {(verificationResult.score * 100).toFixed(0)}
-                      </span>
-                      <span className={`text-xs font-medium mt-1 flex items-center gap-1 ${verificationResult.isMatch ? 'text-emerald-500' : 'text-red-500'}`}>
-                        <span className="material-icons text-[14px]">{verificationResult.isMatch ? 'trending_up' : 'trending_down'}</span>
-                        {verificationResult.isMatch ? 'High Confidence' : 'Low Confidence'}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="w-full grid grid-cols-2 gap-4">
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-lg border border-slate-100 dark:border-slate-700 text-center">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase">Cosine Similarity</p>
-                      <p className="text-lg font-bold text-slate-800 dark:text-white">{verificationResult.score.toFixed(4)}</p>
-                    </div>
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-lg border border-slate-100 dark:border-slate-700 text-center">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase">Threshold</p>
-                      <p className="text-lg font-bold text-slate-800 dark:text-white">{threshold.toFixed(2)}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full">
-                <div className="text-center">
-                  <span className="material-icons text-6xl text-slate-300 dark:text-slate-700">assessment</span>
-                  <p className="text-slate-500 dark:text-slate-400 mt-4 font-medium">No verification results yet</p>
-                  <p className="text-xs text-slate-400 mt-2">Record your voice and click Verify Voice to see analysis</p>
-                </div>
-              </div>
+            {/* Chunk Processing Indicator */}
+            {showChunkProgress && (
+              <ChunkProcessingIndicator
+                isVisible={showChunkProgress}
+                progress={chunkProgress}
+                onComplete={() => {
+                  // Progress will be handled by the verification result
+                }}
+                onError={(errorMsg) => {
+                  setError(errorMsg || 'Processing failed');
+                }}
+              />
             )}
 
-            {error && (
-              <div className="mt-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
-                  <span className="material-icons">error</span>
-                  <div>
-                    <p className="font-semibold text-sm">Error</p>
-                    <p className="text-xs opacity-75">{error}</p>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* Verification Results Display Component */}
+            <VerificationResultsDisplay
+              result={verificationResult}
+              threshold={threshold}
+              verificationError={error}
+            />
           </div>
         </section>
       </main>

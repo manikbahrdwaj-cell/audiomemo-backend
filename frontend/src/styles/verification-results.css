@@ -1,0 +1,357 @@
+/* Verification Results Styling */
+
+/* Result Display Animations */
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulseRing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+@keyframes countUp {
+  from {
+    content-visibility: auto;
+  }
+  to {
+    content-visibility: auto;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    max-height: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    max-height: 500px;
+    transform: translateY(0);
+  }
+}
+
+/* Result Card Animation */
+.verification-result-card {
+  animation: slideInUp 0.5s ease-out;
+}
+
+/* Tab Component Animations */
+.verification-tab-panel {
+  animation: slideInUp 0.3s ease-out;
+}
+
+/* Metric Card Hover States */
+.metric-card {
+  transition: all 0.3s ease;
+}
+
+.metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+}
+
+.metric-card.success:hover {
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.15);
+}
+
+.metric-card.warning:hover {
+  box-shadow: 0 4px 12px rgba(217, 119, 6, 0.15);
+}
+
+.metric-card.error:hover {
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.15);
+}
+
+/* Circular Progress Animation */
+.circular-progress {
+  stroke-dasharray: 282.7;
+  stroke-dashoffset: 0;
+  animation: fillCircle 1.5s ease-out forwards;
+}
+
+@keyframes fillCircle {
+  from {
+    stroke-dashoffset: 282.7;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Score Display */
+.score-display {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Gauge Animation */
+.gauge-fill {
+  animation: gaugeFill 1.5s ease-out forwards;
+}
+
+@keyframes gaugeFill {
+  from {
+    stroke-dasharray: 0 94.25;
+  }
+  to {
+    stroke-dasharray: auto;
+  }
+}
+
+/* Progress Bar Animation */
+.progress-bar {
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.progress-bar.success {
+  background: linear-gradient(90deg, #10b981, #34d399);
+}
+
+.progress-bar.warning {
+  background: linear-gradient(90deg, #d97706, #fbbf24);
+}
+
+.progress-bar.error {
+  background: linear-gradient(90deg, #dc2626, #f87171);
+}
+
+.progress-bar.info {
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+}
+
+/* Status Badge Animation */
+.status-badge {
+  animation: slideInUp 0.4s ease-out;
+}
+
+.status-badge.verified {
+  animation: slideInUp 0.4s ease-out, pulseRing 2s infinite;
+}
+
+/* Attempt History Styles */
+.attempt-item {
+  transition: all 0.3s ease;
+}
+
+.attempt-item:hover {
+  border-color: rgb(59, 130, 246);
+  background-color: rgba(59, 130, 246, 0.02);
+}
+
+.attempt-item.expanded {
+  border-color: rgb(59, 130, 246);
+  background-color: rgb(255, 255, 255);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.1);
+}
+
+.attempt-details {
+  animation: slideDown 0.3s ease-out;
+}
+
+/* Confidence Display */
+.confidence-gauge {
+  animation: slideInUp 0.5s ease-out;
+}
+
+.confidence-band {
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.confidence-band.active {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
+}
+
+.confidence-band:hover {
+  transform: scale(1.02);
+}
+
+/* Tab Animation */
+.verification-tab {
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.verification-tab.active {
+  color: rgb(59, 130, 246);
+}
+
+.verification-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: rgb(59, 130, 246);
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    transform: scaleX(0);
+    transform-origin: left;
+  }
+  to {
+    transform: scaleX(1);
+    transform-origin: left;
+  }
+}
+
+/* Loading State */
+.loading-skeleton {
+  background: linear-gradient(90deg, #f3f4f6 0%, #e5e7eb 50%, #f3f4f6 100%);
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite;
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+  .loading-skeleton {
+    background: linear-gradient(90deg, #1f2937 0%, #111827 50%, #1f2937 100%);
+    background-size: 1000px 100%;
+  }
+
+  .metric-card:hover {
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
+  }
+
+  .attempt-item:hover {
+    background-color: rgba(59, 130, 246, 0.05);
+  }
+
+  .attempt-item.expanded {
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
+  }
+
+  .confidence-band.active {
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  }
+}
+
+/* Print Styling */
+@media print {
+  .verification-results-display {
+    page-break-inside: avoid;
+  }
+
+  .metric-card,
+  .attempt-item {
+    page-break-inside: avoid;
+  }
+
+  .progress-bar {
+    background: none;
+    border: 1px solid #000;
+  }
+}
+
+/* Responsive Design */
+@media (max-width: 1024px) {
+  .metric-card {
+    font-size: 0.875rem;
+  }
+
+  .score-display {
+    font-size: 2rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .verification-results-display {
+    padding: 1rem;
+  }
+
+  .metric-card {
+    font-size: 0.75rem;
+  }
+
+  .score-display {
+    font-size: 1.5rem;
+  }
+
+  .circular-progress {
+    width: 150px;
+    height: 150px;
+  }
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Focus Styles for Accessibility */
+.verification-tab:focus-visible,
+.attempt-item:focus-visible,
+.confidence-band:focus-visible {
+  outline: 2px solid rgb(59, 130, 246);
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+}
+
+/* Icon Animations */
+.icon-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Result Success/Failure Indicators */
+.result-success {
+  background-color: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: rgb(34, 197, 94);
+}
+
+.result-failure {
+  background-color: rgba(220, 38, 38, 0.1);
+  border-color: rgba(220, 38, 38, 0.3);
+  color: rgb(220, 38, 38);
+}
+
+.dark .result-success {
+  background-color: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.dark .result-failure {
+  background-color: rgba(220, 38, 38, 0.2);
+  border-color: rgba(220, 38, 38, 0.4);
+}
