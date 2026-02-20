@@ -63,6 +63,8 @@ class VerificationWebSocketService extends EventEmitter {
    * Setup WebSocket message handlers for verification
    */
   _setupMessageHandlers() {
+    console.log('Setting up WebSocket message handlers for verification');
+    
     this.wsClient.on(MESSAGE_TYPES.VERIFY, (message) => {
       this._handleVerificationMessage(message);
     });
@@ -76,7 +78,10 @@ class VerificationWebSocketService extends EventEmitter {
     });
 
     // Handle verification result messages from backend
+    // CRITICAL: This listener receives the "verification_result" event from backend
+    console.log('Registering listener for "verification_result" event');
     this.wsClient.on('verification_result', (message) => {
+      console.log('verification_result event received in service:', message);
       this._handleVerificationResultMessage(message);
     });
   }
@@ -371,6 +376,8 @@ class VerificationWebSocketService extends EventEmitter {
   _handleVerificationResultMessage(message) {
     const { data, status } = message;
     
+    console.log('Verification result message received:', { data, status });
+    
     if (!data) {
       console.warn('Verification result message missing data field', message);
       return;
@@ -387,8 +394,11 @@ class VerificationWebSocketService extends EventEmitter {
       timestamp,
     } = data;
 
+    console.log('Processing verification result:', { is_match, phone_number, similarity_score });
+
     // Emit verified/rejected event based on is_match
     if (is_match) {
+      console.log('✓ Voice verification PASSED - Emitting VERIFIED event');
       this.emit(VERIFICATION_EVENTS.VERIFIED, {
         sessionId: this.currentSessionId,
         result: VERIFICATION_RESULT.MATCH,
@@ -402,6 +412,7 @@ class VerificationWebSocketService extends EventEmitter {
         phoneNumber: phone_number,
       });
     } else {
+      console.log('✗ Voice verification FAILED - Emitting REJECTED event');
       this.emit(VERIFICATION_EVENTS.REJECTED, {
         sessionId: this.currentSessionId,
         result: VERIFICATION_RESULT.MISMATCH,

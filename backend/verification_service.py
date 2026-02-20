@@ -435,6 +435,26 @@ def get_verification_session(session_id: str) -> Optional[VerificationSession]:
     return _verification_sessions.get(session_id)
 
 
+def find_verification_session_by_phone(phone_number: str) -> Optional[VerificationSession]:
+    """
+    Find an active verification session by phone number
+    
+    Args:
+        phone_number: Phone number to search for
+        
+    Returns:
+        VerificationSession if found and active, None otherwise
+    """
+    for session in _verification_sessions.values():
+        if session.phone_number == phone_number and session.status in [
+            VerificationStatus.CREATED,
+            VerificationStatus.ACTIVE,
+            VerificationStatus.PROCESSING
+        ]:
+            return session
+    return None
+
+
 def add_verification_chunk(
     session_id: str,
     audio_data: np.ndarray,

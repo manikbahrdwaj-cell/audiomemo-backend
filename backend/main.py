@@ -120,6 +120,7 @@ class EnrollmentSessionResponse(BaseModel):
     chunks_collected: int
     max_chunks: int
     embeddings_generated: int
+    verified: bool = False  # Whether the phone number is already enrolled
     error_message: Optional[str] = None
 
 class AudioChunkResponse(BaseModel):
@@ -155,6 +156,7 @@ class VerificationSessionResponse(BaseModel):
     started_at: Optional[str] = None
     chunks_collected: int
     max_chunks: int
+    verified: bool = True  # Whether the phone number is enrolled
     error_message: Optional[str] = None
 
 class VerificationChunkResponse(BaseModel):
@@ -231,7 +233,7 @@ def _create_router() -> WebSocketMessageRouter:
         RouteConfig(
             message_type=MessageType.VERIFY,
             handler=handle_verify,
-            requires_fields=["phone_number"],
+            requires_fields=[],  # PHASE 2: Voice-first - no phone_number required
             optional_fields=[],
             rate_limit=10
         ),
@@ -675,6 +677,8 @@ async def create_new_enrollment_session(
     - Initializes a session to collect voice samples from the user
     - Returns session ID for tracking chunk uploads
     - Each session can collect up to max_chunks audio samples
+    - Prevents duplicate enrollment of the same phone number
+    - Returns existing active session if one already exists for the same mobile number
     
     Args:
         phone_number: Unique identifier (phone number)
@@ -683,8 +687,39 @@ async def create_new_enrollment_session(
         
     Returns:
         EnrollmentSessionResponse with session details
+        
+    Raises:
+        HTTPException: 409 Conflict if phone number already enrolled
     """
     logger.info(f"Creating enrollment session for {phone_number} (max_chunks: {max_chunks})")
+    
+    # Check if phone number is already enrolled (duplicate prevention)
+    is_enrolled = check_enrollment(phone_number)
+    if is_enrolled:
+        logger.warning(f"Duplicate enrollment attempt for {phone_number}")
+        raise HTTPException(
+            status_code=409,
+            detail=f"This number is already enrolled. Duplicate enrollment is not allowed."
+        )
+    
+    # Check for existing active session with the same phone number
+    enrollment_manager = get_enrollment_manager()
+    existing_session = enrollment_manager.find_session_by_phone(phone_number)
+    
+    if existing_session:
+        logger.info(f"Found existing enrollment session {existing_session.session_id[:8]} for {phone_number}")
+        return EnrollmentSessionResponse(
+            session_id=existing_session.session_id,
+            phone_number=existing_session.phone_number,
+            status=existing_session.status.value,
+            created_at=existing_session.created_at.isoformat(),
+            started_at=existing_session.started_at.isoformat() if existing_session.started_at else None,
+            chunks_collected=len(existing_session.chunks),
+            max_chunks=existing_session.config.max_chunks,
+            embeddings_generated=len(existing_session.embeddings),
+            verified=False,  # Phone number not enrolled yet
+            error_message=None
+        )
     
     # Create session configuration
     config = EnrollmentSessionConfig(
@@ -705,6 +740,7 @@ async def create_new_enrollment_session(
         chunks_collected=0,
         max_chunks=max_chunks,
         embeddings_generated=0,
+        verified=False,  # Phone number not enrolled yet
         error_message=None
     )
 
@@ -1140,6 +1176,7 @@ async def create_new_verification_session(
     - Each chunk generates an embedding
     - Embeddings are compared against enrolled embedding
     - Returns session ID for subsequent chunk uploads
+    - Returns existing active session if one already exists for the same mobile number
     
     Args:
         phone_number: Phone number of enrolled user to verify
@@ -1157,6 +1194,24 @@ async def create_new_verification_session(
                 detail=f"Phone number {phone_number} is not enrolled"
             )
         
+        # Check for existing active session with the same phone number
+        from verification_service import find_verification_session_by_phone
+        existing_session = find_verification_session_by_phone(phone_number)
+        
+        if existing_session:
+            logger.info(f"Found existing verification session {existing_session.session_id[:8]} for {phone_number}")
+            return VerificationSessionResponse(
+                session_id=existing_session.session_id,
+                phone_number=existing_session.phone_number,
+                status=existing_session.status.value,
+                created_at=existing_session.created_at.isoformat(),
+                started_at=existing_session.started_at.isoformat() if existing_session.started_at else None,
+                chunks_collected=len(existing_session.chunks),
+                max_chunks=existing_session.config.max_chunks,
+                verified=True,  # Phone number is enrolled
+                error_message=None
+            )
+        
         # Create session
         session = create_verification_session(phone_number)
         
@@ -1168,6 +1223,7 @@ async def create_new_verification_session(
             started_at=session.started_at.isoformat() if session.started_at else None,
             chunks_collected=len(session.chunks),
             max_chunks=session.config.max_chunks,
+            verified=True,  # Phone number is enrolled
             error_message=session.error_message
         )
         

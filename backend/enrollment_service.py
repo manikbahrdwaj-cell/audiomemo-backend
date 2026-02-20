@@ -495,6 +495,15 @@ class EnrollmentSession:
                 final_embedding = self.embeddings[0]
                 embedding_source = "single_embedding"
         
+        # Check for duplicate enrollment (prevent re-enrollment)
+        from database import check_enrollment
+        if check_enrollment(self.phone_number):
+            error_msg = f"Phone number {self.phone_number} is already enrolled. Re-enrollment is not allowed."
+            logger.warning(error_msg)
+            self.status = EnrollmentStatus.ERROR
+            self.error_message = error_msg
+            return False, error_msg, None
+        
         # Store in database
         try:
             vector_id = store_voice_embedding(self.phone_number, final_embedding)
@@ -649,6 +658,25 @@ class EnrollmentServiceManager:
     def list_sessions(self) -> List[Dict[str, Any]]:
         """List all sessions with summaries"""
         return [session.get_summary() for session in self.sessions.values()]
+    
+    def find_session_by_phone(self, phone_number: str) -> Optional[EnrollmentSession]:
+        """
+        Find an active/collecting enrollment session by phone number
+        
+        Args:
+            phone_number: Phone number to search for
+            
+        Returns:
+            EnrollmentSession if found and active, None otherwise
+        """
+        for session in self.sessions.values():
+            if session.phone_number == phone_number and session.status in [
+                EnrollmentStatus.ACTIVE, 
+                EnrollmentStatus.COLLECTING, 
+                EnrollmentStatus.PROCESSING
+            ]:
+                return session
+        return None
 
 
 # Global enrollment service manager instance

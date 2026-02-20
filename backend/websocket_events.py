@@ -16,9 +16,16 @@ from websocket_handler import (
     ConnectionState
 )
 from voice_embedding import generate_embedding
-from database import store_voice_embedding, find_nearest_embedding, check_enrollment, get_voice_embedding
+from database import (
+    store_voice_embedding, 
+    find_nearest_embedding, 
+    check_enrollment, 
+    get_voice_embedding,
+    save_verified_session
+)
 from chunk_progress_dispatcher import get_chunk_progress_dispatcher, ChunkProcessingStatus
 from embedding_similarity_operations import EmbeddingSimilarityCalculator
+from session_service import get_verified_session_manager
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +133,18 @@ class WebSocketEventHandler:
     
     async def handle_verify(self, connection: ClientConnection,
                            message: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle voice verification"""
+        """
+        Handle voice-first verification (Phase 2)
+        
+        Flow:
+        1. User records voice (no phone number required)
+        2. Backend generates embedding
+        3. Backend searches ALL enrolled embeddings
+        4. If best match > threshold, create verified session
+        5. Return matched phone_number and session_id
+        """
         try:
             client_id = connection.client_id
-            phone_number = message.get("phone_number")
             
             # Get buffer
             if client_id not in self.audio_buffers:
@@ -147,25 +162,18 @@ class WebSocketEventHandler:
                     f"Audio data too small (min: {MIN_AUDIO_SIZE} bytes)"
                 )
             
-            # Check if enrolled
-            if not check_enrollment(phone_number):
-                return WebSocketMessageBuilder.create_error_message(
-                    "not_enrolled",
-                    f"Phone number {phone_number} not enrolled"
-                )
-            
             # Update connection state
             connection.set_state(ConnectionState.PROCESSING)
             
             # Create a session ID for this verification process
-            session_id = str(uuid.uuid4())
+            verification_session_id = str(uuid.uuid4())
             dispatcher = get_chunk_progress_dispatcher()
             
             # Estimate number of chunks
             audio_data = buffer.get_data()
             estimated_chunks = max(1, len(audio_data) // (16000 * 2))  # 2 bytes per sample
-            dispatcher.create_session(session_id, estimated_chunks)
-            dispatcher.start_processing(session_id)
+            dispatcher.create_session(verification_session_id, estimated_chunks)
+            dispatcher.start_processing(verification_session_id)
             
             # Subscribe to progress updates and send them to the client
             async def send_progress(progress):
@@ -180,21 +188,22 @@ class WebSocketEventHandler:
             progress_sub_id = await dispatcher.subscribe(send_progress)
             
             try:
-                # Generate embedding
-                logger.info(f"Generating embedding for verification: {phone_number}")
+                # Generate embedding from user's voice
+                logger.info("Generating embedding for voice-first verification...")
                 query_embedding = generate_embedding(buffer.get_data())
                 
-                # Find nearest match
+                # PHASE 2: Search across ALL enrolled embeddings (no phone_number filter)
+                logger.info("Searching across all enrolled embeddings...")
                 results = find_nearest_embedding(
                     query_embedding=query_embedding,
-                    phone_number=phone_number,
+                    phone_number=None,  # Search ALL enrollments
                     limit=1
                 )
                 
                 # Mark as completed
-                await dispatcher.mark_completed(session_id)
+                await dispatcher.mark_completed(verification_session_id)
             except Exception as e:
-                await dispatcher.mark_failed(session_id, str(e))
+                await dispatcher.mark_failed(verification_session_id, str(e))
                 raise
             finally:
                 await dispatcher.unsubscribe(send_progress)
@@ -202,25 +211,35 @@ class WebSocketEventHandler:
             # Clear buffer
             buffer.clear()
             
+            # ==================== VERIFICATION RESULT HANDLING ====================
+            
             if not results:
                 connection.set_state(ConnectionState.IDLE)
+                logger.warning("No enrolled embeddings found in system")
                 return WebSocketMessageBuilder.create_error_message(
-                    "no_embedding",
-                    "No enrollment found for verification"
+                    "no_match",
+                    "No record found for this voice in the system."
                 )
             
-            # Use EmbeddingSimilarityCalculator for comprehensive metrics
-            similarity_score = results[0]["similarity_score"]
-            enrolled_embedding = results[0].get("embedding")
+            # Get best match
+            best_match = results[0]
+            matched_phone_number = best_match["phone_number"]
+            similarity_score = best_match["similarity_score"]
+            
+            logger.info(
+                f"Best match: {matched_phone_number} "
+                f"with similarity score {similarity_score:.4f}"
+            )
             
             # Get comprehensive similarity metrics
             calculator = EmbeddingSimilarityCalculator(metric='cosine')
-            
-            # If enrolled_embedding is available, compute all metrics
             comprehensive_metrics = {}
-            if enrolled_embedding is not None:
-                try:
-                    enrolled_emb = np.array(enrolled_embedding, dtype=np.float32)
+            
+            try:
+                # Get the full enrollment document to access embedding
+                enrolled_doc = get_voice_embedding(matched_phone_number)
+                if enrolled_doc and "embedding" in enrolled_doc:
+                    enrolled_emb = np.array(enrolled_doc["embedding"], dtype=np.float32)
                     query_emb = np.array(query_embedding, dtype=np.float32)
                     
                     comparison_result = calculator.compare(
@@ -238,44 +257,125 @@ class WebSocketEventHandler:
                         "correlation_distance": float(comparison_result.correlation_distance) if comparison_result.correlation_distance else None,
                         "confidence": float(comparison_result.confidence),
                     }
-                except Exception as e:
-                    logger.warning(f"Failed to compute comprehensive metrics: {str(e)}")
+                else:
                     comprehensive_metrics = {
                         "cosine_similarity": float(similarity_score),
                         "cosine_distance": float(1.0 - similarity_score),
                     }
-            else:
+            except Exception as e:
+                logger.warning(f"Failed to compute comprehensive metrics: {str(e)}")
                 comprehensive_metrics = {
                     "cosine_similarity": float(similarity_score),
                     "cosine_distance": float(1.0 - similarity_score),
                 }
             
+            # ==================== VERIFICATION DECISION ====================
+            
             is_match = similarity_score >= SIMILARITY_THRESHOLD
             
-            result_message = WebSocketMessageBuilder.create_success_message(
-                "verification_result",
-                {
-                    "phone_number": phone_number,
-                    "similarity_score": float(similarity_score),
-                    "is_match": is_match,
-                    "threshold": SIMILARITY_THRESHOLD,
-                    "confidence": comprehensive_metrics.get("confidence", min(similarity_score * 100, 100.0)),
-                    "metrics": comprehensive_metrics,
-                    "match_id": str(uuid.uuid4()),
+            if is_match:
+                # SUCCESS: Create verified session
+                logger.info(
+                    f"✓ Voice verification successful for {matched_phone_number} "
+                    f"(score: {similarity_score:.4f})"
+                )
+                
+                session_manager = get_verified_session_manager()
+                
+                # Create verified session
+                verified_session = session_manager.create_verified_session(
+                    phone_number=matched_phone_number,
+                    verification_score=similarity_score,
+                    similarity_metrics=comprehensive_metrics
+                )
+                
+                # Create LangChain session
+                try:
+                    langgraph_session_id = session_manager.create_langgraph_session(verified_session)
+                    logger.info(f"Created LangGraph session: {langgraph_session_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to create LangGraph session: {str(e)}")
+                    langgraph_session_id = None
+                
+                # Store verified session in MongoDB
+                try:
+                    session_doc = verified_session.to_dict()
+                    session_doc["langgraph_session_id"] = langgraph_session_id
+                    save_verified_session(session_doc)
+                    logger.info(f"Stored verified session in MongoDB: {verified_session.session_id[:8]}")
+                except Exception as e:
+                    logger.error(f"Failed to store verified session in MongoDB: {str(e)}")
+                
+                # Update connection state
+                connection.set_state(ConnectionState.IDLE)
+                connection.set_metadata("verified_phone", matched_phone_number)
+                connection.set_metadata("session_id", verified_session.session_id)
+                connection.set_metadata("verified_at", datetime.now().isoformat())
+                
+                # Log before sending response
+                logger.info("Sending verification result to frontend: SUCCESS")
+                
+                # Build response with correct event name for frontend
+                result_message = {
+                    "event": "verification_result",
+                    "type": "verification_result",
+                    "status": "success",
+                    "data": {
+                        "status": "success",
+                        "is_match": True,
+                        "message": f"This voice is matched with this mobile number: {matched_phone_number}",
+                        "phone_number": matched_phone_number,
+                        "session_id": verified_session.session_id,
+                        "langgraph_session_id": langgraph_session_id,
+                        "similarity_score": float(similarity_score),
+                        "threshold": SIMILARITY_THRESHOLD,
+                        "confidence": comprehensive_metrics.get("confidence", min(similarity_score * 100, 100.0)),
+                        "metrics": comprehensive_metrics,
+                        "timestamp": datetime.now().isoformat()
+                    },
                     "timestamp": datetime.now().isoformat()
                 }
-            )
             
-            # Update connection state
-            connection.set_state(ConnectionState.IDLE)
+            else:
+                # FAILURE: No match above threshold
+                logger.info(
+                    f"✗ Voice verification failed for {matched_phone_number} "
+                    f"(score: {similarity_score:.4f}, threshold: {SIMILARITY_THRESHOLD})"
+                )
+                
+                # Update connection state
+                connection.set_state(ConnectionState.IDLE)
+                
+                # Log before sending response
+                logger.info("Sending verification result to frontend: FAILED")
+                
+                # Build response with correct event name for frontend
+                result_message = {
+                    "event": "verification_result",
+                    "type": "verification_result",
+                    "status": "failed",
+                    "data": {
+                        "status": "failed",
+                        "is_match": False,
+                        "message": "No phone number is matched with this voice.",
+                        "phone_number": None,
+                        "best_match_phone": matched_phone_number,
+                        "best_match_score": float(similarity_score),
+                        "threshold": SIMILARITY_THRESHOLD,
+                        "similarity_score": float(similarity_score),
+                        "confidence": comprehensive_metrics.get("confidence", min(similarity_score * 100, 100.0)),
+                        "metrics": comprehensive_metrics,
+                        "timestamp": datetime.now().isoformat()
+                    },
+                    "timestamp": datetime.now().isoformat()
+                }
+            
             connection.set_metadata("last_verification", datetime.now().isoformat())
-            
-            logger.info(f"Verification completed: score={similarity_score:.4f}, match={is_match}")
             
             return result_message
         
         except Exception as e:
-            logger.error(f"Verification error: {str(e)}")
+            logger.error(f"Verification error: {str(e)}", exc_info=True)
             if client_id in self.audio_buffers:
                 self.audio_buffers[client_id].clear()
             connection.set_state(ConnectionState.ERROR)
@@ -333,6 +433,22 @@ class WebSocketEventHandler:
             progress_sub_id = await dispatcher.subscribe(send_progress)
             
             try:
+                # Check if phone number is already enrolled (duplicate prevention)
+                if check_enrollment(phone_number):
+                    logger.warning(f"Duplicate enrollment attempt via WebSocket: {phone_number}")
+                    await dispatcher.mark_failed(session_id, "Phone number already enrolled")
+                    
+                    error_message = WebSocketMessageBuilder.create_error_message(
+                        "duplicate_enrollment",
+                        "This number is already enrolled. Duplicate enrollment is not allowed."
+                    )
+                    
+                    # Clear buffer
+                    buffer.clear()
+                    connection.set_state(ConnectionState.IDLE)
+                    
+                    return error_message
+                
                 # Generate embedding
                 logger.info(f"Generating embedding for enrollment: {phone_number}")
                 embedding = generate_embedding(buffer.get_data())

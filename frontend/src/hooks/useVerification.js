@@ -133,6 +133,7 @@ export function useVerification(verificationService) {
     };
 
     const handleVerified = (data) => {
+      console.log('✓ Voice verified successfully', data);
       setStatus(VERIFICATION_STATUS.VERIFIED);
       const metrics = data.metrics || {};
       setMetrics(metrics);
@@ -149,6 +150,7 @@ export function useVerification(verificationService) {
     };
 
     const handleRejected = (data) => {
+      console.log('✗ Voice verification rejected', data);
       setStatus(VERIFICATION_STATUS.REJECTED);
       const metrics = data.metrics || {};
       setMetrics(metrics);

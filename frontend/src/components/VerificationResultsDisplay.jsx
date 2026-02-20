@@ -155,7 +155,11 @@ function VerificationResultsDisplay({ result, threshold, verificationError }) {
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
                     Target Identity
                   </p>
-                  <p className="text-lg font-bold text-slate-800 dark:text-white">{result.phoneNumber}</p>
+                  <p className="text-lg font-bold text-slate-800 dark:text-white">
+                    {result.phoneNumber === 'Unknown' 
+                      ? 'No phone number is enrolled with this voice' 
+                      : `${result.phoneNumber} is matched`}
+                  </p>
                   <p className="text-xs text-slate-500 mt-1">Phone Number</p>
                 </div>
 

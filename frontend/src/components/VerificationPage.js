@@ -1,18 +1,14 @@
 import React, { useState, useRef } from 'react';
 import { createAudioRecorder, calculateDuration } from '../utils/audioRecorder';
-import { verifyVoice, checkEnrollment } from '../services/api';
 import { splitAudioIntoBase64Chunks, getChunkDurationByMode } from '../utils/audioChunkSplitter';
 import ChunkProcessingIndicator from './ChunkProcessingIndicator';
 import VerificationResultsDisplay from './VerificationResultsDisplay';
 
 function VerificationPage() {
-  const [phoneNumber, setPhoneNumber] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState(null);
   const [audioDuration, setAudioDuration] = useState(0);
   const [isVerifying, setIsVerifying] = useState(false);
-  const [isChecking, setIsChecking] = useState(false);
-  const [enrollmentStatus, setEnrollmentStatus] = useState(null);
   const [verificationResult, setVerificationResult] = useState(null);
   const [error, setError] = useState(null);
   const [threshold, setThreshold] = useState(0.75);
@@ -23,40 +19,6 @@ function VerificationPage() {
   const recorderRef = useRef(null);
   const timerRef = useRef(null);
   const wsRef = useRef(null);
-
-  const handlePhoneChange = (e) => {
-    const value = e.target.value.replace(/[^\d+\-\s]/g, '');
-    setPhoneNumber(value);
-    setEnrollmentStatus(null);
-    setVerificationResult(null);
-    setError(null);
-  };
-
-  const handleCheckEnrollment = async () => {
-    if (!phoneNumber.trim()) {
-      setError('Please enter a phone number');
-      return;
-    }
-
-    setIsChecking(true);
-    setError(null);
-    setEnrollmentStatus(null);
-    setVerificationResult(null);
-
-    try {
-      const response = await checkEnrollment(phoneNumber.trim());
-      setEnrollmentStatus({
-        enrolled: response.enrolled,
-        message: response.enrolled 
-          ? 'Identity found. You can now verify your voice.'
-          : 'Identity not found. Please enroll first.',
-      });
-    } catch (err) {
-      setError('Failed to check enrollment status. Please try again.');
-    } finally {
-      setIsChecking(false);
-    }
-  };
 
   const handleRecord = async () => {
     if (isRecording) {
@@ -95,11 +57,6 @@ function VerificationPage() {
   };
 
   const handleVerify = async () => {
-    if (!phoneNumber.trim()) {
-      setError('Please enter a phone number');
-      return;
-    }
-
     if (!audioBlob) {
       setError('Please record your voice first');
       return;
@@ -200,8 +157,7 @@ function VerificationPage() {
           }
 
           ws.send(JSON.stringify({
-            type: "verify",
-            phone_number: phoneNumber.trim()
+            type: "verify"
           }));
 
           // Listen for verification result
@@ -245,21 +201,22 @@ function VerificationPage() {
 
           console.log('Result received:', result);
           
-
-          
           if (!result) {
             throw new Error("Invalid verification response structure");
           }
 
-          const score = Number(result?.data?.similarity_score ?? 0);
+          // Extract phone number and score from response
+          const detectedPhoneNumber = result?.payload?.phone_number || result?.data?.phone_number || 'Unknown';
+          const score = Number(result?.data?.similarity_score ?? result?.payload?.similarity_score ?? 0);
 
+          console.log("Extracted Phone Number:", detectedPhoneNumber);
           console.log("Extracted Score:", score);
           const isMatch = score >= threshold;
 
           setVerificationResult({
             score: score,
             isMatch: isMatch,
-            phoneNumber: phoneNumber.trim(),
+            phoneNumber: detectedPhoneNumber,
             threshold: threshold,
           });
         } catch (error) {
@@ -324,49 +281,21 @@ function VerificationPage() {
       <main className="flex-grow flex p-6 gap-6 h-[calc(100vh-73px)] overflow-hidden">
         {/* Left Side: Control & Input Zone */}
         <section className="w-2/5 flex flex-col gap-6 overflow-y-auto">
-          {/* Lookup Card */}
+          {/* Voice-First Verification Info Card */}
           <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-primary/10 shadow-sm">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-4 flex items-center gap-2">
-              <span className="material-icons text-sm">person_search</span>
-              Identify Target
+              <span className="material-icons text-sm">auto_awesome</span>
+              Voice-First Verification
             </h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium mb-1.5 text-slate-600 dark:text-slate-400">
-                  Phone Number / Identity ID
-                </label>
-                <div className="relative">
-                  <input
-                    className="w-full pl-10 pr-4 py-2.5 bg-background-light dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-sm"
-                    placeholder="+1 (555) 000-0000"
-                    type="tel"
-                    value={phoneNumber}
-                    onChange={handlePhoneChange}
-                    disabled={isRecording || isVerifying}
-                  />
-                  <span className="material-icons absolute left-3 top-2.5 text-slate-400 text-sm">phone</span>
-                </div>
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Simply record your voice. The system will automatically detect your identity from your voice biometrics.
+              </p>
+              <div className="text-xs text-slate-500 space-y-2">
+                <p>✓ No need to enter a phone number</p>
+                <p>✓ Identity auto-detected from your voice</p>
+                <p>✓ Your detected number appears after verification</p>
               </div>
-              <button
-                onClick={handleCheckEnrollment}
-                disabled={!phoneNumber.trim() || isChecking}
-                className="w-full bg-primary hover:bg-primary/90 disabled:opacity-50 text-white font-semibold py-2.5 rounded-lg transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/20"
-              >
-                <span className="material-icons text-lg">search</span>
-                {isChecking ? 'Checking...' : 'Retrieve Enrollment'}
-              </button>
-              {enrollmentStatus && (
-                <div className={`p-3 rounded-lg ${enrollmentStatus.enrolled 
-                  ? 'bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800' 
-                  : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'}`}>
-                  <p className={`text-xs font-semibold ${enrollmentStatus.enrolled 
-                    ? 'text-emerald-700 dark:text-emerald-300' 
-                    : 'text-red-700 dark:text-red-300'}`}>
-                    {enrollmentStatus.enrolled ? '✓ Enrolled' : '✗ Not Enrolled'}
-                  </p>
-                  <p className="text-xs text-opacity-75 mt-1">{enrollmentStatus.message}</p>
-                </div>
-              )}
             </div>
           </div>
 

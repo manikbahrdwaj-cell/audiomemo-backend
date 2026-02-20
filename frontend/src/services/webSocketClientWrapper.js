@@ -227,7 +227,7 @@ class WebSocketClientWrapper extends EventEmitter {
    * Handle incoming message
    */
   handleMessage(message) {
-    this.log('info', `Message received: ${message.type}`);
+    this.log('info', `Message received: ${message.type || message.event}`);
     this.emit(EVENT_TYPES.MESSAGE, message);
     this.onMessageReceived(message);
 
@@ -257,7 +257,7 @@ class WebSocketClientWrapper extends EventEmitter {
       return;
     }
 
-    // Route to specific message handlers
+    // Route to specific message handlers by type
     const handlers = this.messageHandlers[message.type];
     if (handlers) {
       handlers.forEach(handler => {
@@ -267,6 +267,14 @@ class WebSocketClientWrapper extends EventEmitter {
           this.log('error', `Error in handler for message type "${message.type}"`, error);
         }
       });
+    }
+
+    // CRITICAL: Also emit events by "event" field if present
+    // This allows backend messages with "event" field to trigger frontend listeners
+    // Example: Backend sends {event: "verification_result", ...}
+    if (message.event) {
+      this.log('info', `Emitting event: ${message.event}`);
+      this.emit(message.event, message);
     }
   }
 
