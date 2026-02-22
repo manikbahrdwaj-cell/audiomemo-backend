@@ -18,7 +18,8 @@ from websocket_handler import (
 from voice_embedding import generate_embedding
 from database import (
     store_voice_embedding, 
-    find_nearest_embedding, 
+    find_nearest_embedding,
+    verify_phone_number_embedding,
     check_enrollment, 
     get_voice_embedding,
     save_verified_session
@@ -134,19 +135,31 @@ class WebSocketEventHandler:
     async def handle_verify(self, connection: ClientConnection,
                            message: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Handle voice-first verification (Phase 2)
+        Handle optimized phone-number based voice verification
         
         Flow:
-        1. User records voice (no phone number required)
-        2. Backend generates embedding
-        3. Backend searches ALL enrolled embeddings
-        4. If best match > threshold, create verified session
-        5. Return matched phone_number and session_id
+        1. Receive phone_number from client
+        2. Check if phone_number exists in database
+        3. If not exists: return error "Phone number not registered"
+        4. If exists: fetch only that user's embedding
+        5. Generate embedding from input voice
+        6. Compare ONLY with that user's embedding (no looping through all users)
+        7. Return similarity score and verification result
+        
+        Optimization: Uses indexed query on phone_number, avoids full collection scan
         """
         try:
             client_id = connection.client_id
+            phone_number = message.get("phone_number", "").strip()
             
-            # Get buffer
+            # Validate phone number input
+            if not phone_number:
+                return WebSocketMessageBuilder.create_error_message(
+                    "invalid_phone",
+                    "Phone number is required for verification"
+                )
+            
+            # Get audio buffer
             if client_id not in self.audio_buffers:
                 return WebSocketMessageBuilder.create_error_message(
                     "no_audio",
@@ -188,20 +201,43 @@ class WebSocketEventHandler:
             progress_sub_id = await dispatcher.subscribe(send_progress)
             
             try:
-                # Generate embedding from user's voice
-                logger.info("Generating embedding for voice-first verification...")
+                # OPTIMIZATION STEP 1: Check if phone number is registered
+                logger.info(f"Checking if phone number {phone_number} is registered...")
+                if not check_enrollment(phone_number):
+                    logger.warning(f"Phone number {phone_number} is not registered")
+                    await dispatcher.mark_failed(
+                        verification_session_id, 
+                        f"Phone number {phone_number} is not registered"
+                    )
+                    
+                    connection.set_state(ConnectionState.IDLE)
+                    buffer.clear()
+                    
+                    return WebSocketMessageBuilder.create_error_message(
+                        "phone_not_registered",
+                        f"Phone number {phone_number} is not registered. Please enroll first."
+                    )
+                
+                logger.info(f"✓ Phone number {phone_number} is registered, proceeding with verification...")
+                
+                # OPTIMIZATION STEP 2: Generate embedding from input voice
+                logger.info("Generating embedding for input voice...")
                 query_embedding = generate_embedding(buffer.get_data())
                 
-                # PHASE 2: Search across ALL enrolled embeddings (no phone_number filter)
-                logger.info("Searching across all enrolled embeddings...")
-                results = find_nearest_embedding(
+                # OPTIMIZATION STEP 3: Use optimized phone-number based lookup
+                # This function:
+                # - Uses indexed query on phone_number (O(1) lookup)
+                # - Fetches ONLY that user's embedding
+                # - Returns immediately without searching ALL documents
+                logger.info(f"Comparing voice with stored profile for {phone_number}...")
+                result = verify_phone_number_embedding(
                     query_embedding=query_embedding,
-                    phone_number=None,  # Search ALL enrollments
-                    limit=1
+                    phone_number=phone_number
                 )
                 
                 # Mark as completed
                 await dispatcher.mark_completed(verification_session_id)
+                
             except Exception as e:
                 await dispatcher.mark_failed(verification_session_id, str(e))
                 raise
@@ -213,21 +249,19 @@ class WebSocketEventHandler:
             
             # ==================== VERIFICATION RESULT HANDLING ====================
             
-            if not results:
+            if not result:
                 connection.set_state(ConnectionState.IDLE)
-                logger.warning("No enrolled embeddings found in system")
+                logger.warning(f"No embedding found for {phone_number}")
                 return WebSocketMessageBuilder.create_error_message(
-                    "no_match",
-                    "No record found for this voice in the system."
+                    "no_embedding",
+                    f"No voice profile found for phone number {phone_number}"
                 )
             
-            # Get best match
-            best_match = results[0]
-            matched_phone_number = best_match["phone_number"]
-            similarity_score = best_match["similarity_score"]
+            matched_phone_number = result["phone_number"]
+            similarity_score = result["similarity_score"]
             
             logger.info(
-                f"Best match: {matched_phone_number} "
+                f"Verification comparison: {matched_phone_number} "
                 f"with similarity score {similarity_score:.4f}"
             )
             
@@ -236,10 +270,9 @@ class WebSocketEventHandler:
             comprehensive_metrics = {}
             
             try:
-                # Get the full enrollment document to access embedding
-                enrolled_doc = get_voice_embedding(matched_phone_number)
-                if enrolled_doc and "embedding" in enrolled_doc:
-                    enrolled_emb = np.array(enrolled_doc["embedding"], dtype=np.float32)
+                # Get the full enrollment document (we already have it in result)
+                if "embedding" in result:
+                    enrolled_emb = np.array(result["embedding"], dtype=np.float32)
                     query_emb = np.array(query_embedding, dtype=np.float32)
                     
                     comparison_result = calculator.compare(
@@ -323,7 +356,7 @@ class WebSocketEventHandler:
                     "data": {
                         "status": "success",
                         "is_match": True,
-                        "message": f"This voice is matched with this mobile number: {matched_phone_number}",
+                        "message": f"Voice verification successful for {matched_phone_number}",
                         "phone_number": matched_phone_number,
                         "session_id": verified_session.session_id,
                         "langgraph_session_id": langgraph_session_id,
@@ -337,7 +370,7 @@ class WebSocketEventHandler:
                 }
             
             else:
-                # FAILURE: No match above threshold
+                # FAILURE: Voice doesn't match the registered profile for this phone number
                 logger.info(
                     f"✗ Voice verification failed for {matched_phone_number} "
                     f"(score: {similarity_score:.4f}, threshold: {SIMILARITY_THRESHOLD})"
@@ -357,12 +390,11 @@ class WebSocketEventHandler:
                     "data": {
                         "status": "failed",
                         "is_match": False,
-                        "message": "No phone number is matched with this voice.",
+                        "message": f"This voice does not match the registered profile for {matched_phone_number}",
                         "phone_number": None,
-                        "best_match_phone": matched_phone_number,
-                        "best_match_score": float(similarity_score),
-                        "threshold": SIMILARITY_THRESHOLD,
+                        "registered_phone": matched_phone_number,
                         "similarity_score": float(similarity_score),
+                        "threshold": SIMILARITY_THRESHOLD,
                         "confidence": comprehensive_metrics.get("confidence", min(similarity_score * 100, 100.0)),
                         "metrics": comprehensive_metrics,
                         "timestamp": datetime.now().isoformat()

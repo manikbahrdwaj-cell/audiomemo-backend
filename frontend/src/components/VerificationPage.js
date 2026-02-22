@@ -5,6 +5,7 @@ import ChunkProcessingIndicator from './ChunkProcessingIndicator';
 import VerificationResultsDisplay from './VerificationResultsDisplay';
 
 function VerificationPage() {
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState(null);
   const [audioDuration, setAudioDuration] = useState(0);
@@ -57,6 +58,12 @@ function VerificationPage() {
   };
 
   const handleVerify = async () => {
+    // Validate phone number first
+    if (!phoneNumber || phoneNumber.trim() === '') {
+      setError('Please enter a phone number');
+      return;
+    }
+
     if (!audioBlob) {
       setError('Please record your voice first');
       return;
@@ -157,7 +164,8 @@ function VerificationPage() {
           }
 
           ws.send(JSON.stringify({
-            type: "verify"
+            type: "verify",
+            phone_number: phoneNumber.trim()
           }));
 
           // Listen for verification result
@@ -281,20 +289,33 @@ function VerificationPage() {
       <main className="flex-grow flex p-6 gap-6 h-[calc(100vh-73px)] overflow-hidden">
         {/* Left Side: Control & Input Zone */}
         <section className="w-2/5 flex flex-col gap-6 overflow-y-auto">
-          {/* Voice-First Verification Info Card */}
+          {/* Phone Number Input Card */}
           <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-primary/10 shadow-sm">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-4 flex items-center gap-2">
-              <span className="material-icons text-sm">auto_awesome</span>
-              Voice-First Verification
+              <span className="material-icons text-sm">phone</span>
+              Phone Number Verification
             </h2>
-            <div className="space-y-3">
+            <div className="space-y-4">
               <p className="text-sm text-slate-600 dark:text-slate-400">
-                Simply record your voice. The system will automatically detect your identity from your voice biometrics.
+                Enter your phone number to verify your identity using your voice. Your number will be used to fetch your stored voice profile for comparison.
               </p>
-              <div className="text-xs text-slate-500 space-y-2">
-                <p>✓ No need to enter a phone number</p>
-                <p>✓ Identity auto-detected from your voice</p>
-                <p>✓ Your detected number appears after verification</p>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-2">
+                  Phone Number (Required)
+                </label>
+                <input
+                  type="tel"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  placeholder="Enter your phone number (e.g., +1234567890)"
+                  disabled={isRecording || isVerifying}
+                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+              </div>
+              <div className="text-xs text-slate-500 space-y-1">
+                <p>✓ Enter phone number before recording</p>
+                <p>✓ System will fetch your stored profile</p>
+                <p>✓ Your voice will be compared with stored embedding</p>
               </div>
             </div>
           </div>

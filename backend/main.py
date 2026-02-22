@@ -40,7 +40,8 @@ from database import (
     store_voice_embedding,
     get_voice_embedding,
     check_enrollment,
-    find_nearest_embedding
+    find_nearest_embedding,
+    verify_phone_number_embedding
 )
 from websocket_handler import ConnectionManager, WebSocketMessageValidator, WebSocketMessageBuilder
 from websocket_events import event_handler
@@ -562,27 +563,39 @@ async def enroll_voice(
 
 @app.post("/verify", response_model=VerifyResponse)
 async def verify_voice(
-    phone_number: str = Form(..., description="Phone number to verify against"),
+    phone_number: str = Form(..., description="Phone number to verify"),
     file: UploadFile = File(..., description="WAV audio file for verification")
 ):
     """
-    Verify a voice against enrolled identity
+    Optimized voice verification endpoint
     
+    - Requires phone_number (for indexed query - much faster)
     - Receives phone_number and audio file
+    - Checks if phone_number is registered (optimized indexed lookup)
     - Generates query embedding from audio
-    - Compares against stored embedding using cosine similarity
+    - Compares against ONLY that user's stored embedding (no full collection scan)
     - Returns confidence score
+    
+    This endpoint avoids the performance issue of searching all documents.
+    Uses phone_number-indexed query to fetch only the relevant user's profile.
     """
     logger.info(f"Verification request for phone number: {phone_number}")
     
     # Similarity threshold for positive match
     SIMILARITY_THRESHOLD = 0.75
     
-    # Check if phone number is enrolled
+    # Validate phone number
+    if not phone_number or not phone_number.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number is required"
+        )
+    
+    # Check if phone number is enrolled (optimized indexed query)
     if not check_enrollment(phone_number):
         raise HTTPException(
             status_code=404,
-            detail=f"Phone number {phone_number} is not enrolled. Please enroll first."
+            detail=f"Phone number {phone_number} is not registered. Please enroll first."
         )
     
     # Validate file type
@@ -608,23 +621,26 @@ async def verify_voice(
         query_embedding = generate_embedding(audio_bytes)
         logger.info(f"Generated query embedding with shape: {query_embedding.shape}")
         
-        # Find nearest match for this phone number
-        results = find_nearest_embedding(
+        # OPTIMIZED APPROACH: Use phone-number based verification
+        # This function:
+        # - Uses indexed query on phone_number (O(1) lookup instead of O(n) scan)
+        # - Fetches only ONE document (the registered user)
+        # - Returns immediately without looping through all documents
+        result = verify_phone_number_embedding(
             query_embedding=query_embedding,
-            phone_number=phone_number,
-            limit=1
+            phone_number=phone_number
         )
         
-        if not results:
+        if not result:
             raise HTTPException(
                 status_code=404,
                 detail=f"No embedding found for phone number: {phone_number}"
             )
         
-        similarity_score = results[0]["similarity_score"]
+        similarity_score = result["similarity_score"]
         is_match = similarity_score >= SIMILARITY_THRESHOLD
         
-        logger.info(f"Verification result: score={similarity_score:.4f}, match={is_match}")
+        logger.info(f"Verification result: phone={phone_number}, score={similarity_score:.4f}, match={is_match}")
         
         return VerifyResponse(
             success=True,

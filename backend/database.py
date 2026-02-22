@@ -251,6 +251,56 @@ def find_nearest_embedding(
     results.sort(key=lambda x: x["similarity_score"], reverse=True)
     return results[:limit]
 
+def verify_phone_number_embedding(
+    query_embedding: np.ndarray,
+    phone_number: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Optimized verification: Check if phone number exists and compare embedding
+    
+    This function is optimized for verification flow:
+    1. Uses indexed query on phone_number (much faster)
+    2. Fetches only ONE document (the registered user)
+    3. Calculates similarity with that one embedding
+    4. Returns result immediately without searching through all documents
+    
+    Args:
+        query_embedding: Query embedding vector from input voice
+        phone_number: Phone number to verify against
+        
+    Returns:
+        Dict with phone_number and similarity_score, or None if not found
+    """
+    collection = get_database()
+    
+    # Fast indexed lookup - only returns the ONE document with this phone_number
+    doc = collection.find_one({"phone_number": phone_number})
+    
+    if not doc:
+        # Phone number not enrolled
+        return None
+    
+    # Calculate similarity with the stored embedding
+    stored_embedding = np.array(doc["embedding"])
+    
+    query_norm = np.linalg.norm(query_embedding)
+    stored_norm = np.linalg.norm(stored_embedding)
+    
+    if query_norm > 0 and stored_norm > 0:
+        # Calculate cosine similarity
+        similarity = np.dot(query_embedding, stored_embedding) / (query_norm * stored_norm)
+        # Convert from [-1, 1] to [0, 1]
+        similarity = (similarity + 1) / 2
+    else:
+        similarity = 0.0
+    
+    return {
+        "phone_number": doc["phone_number"],
+        "similarity_score": float(similarity),
+        "_id": str(doc["_id"]),
+        "embedding": doc.get("embedding")  # Include embedding for detailed metrics
+    }
+
 def delete_voice_embedding(phone_number: str) -> bool:
     """
     Delete a voice embedding by phone number
