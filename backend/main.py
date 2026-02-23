@@ -33,6 +33,7 @@ import logging
 import json
 import uuid
 import io
+import base64
 import numpy as np
 
 from voice_embedding import generate_embedding, calculate_cosine_similarity
@@ -63,6 +64,10 @@ from verification_service import (
     add_verification_chunk,
     process_verification_session,
     VerificationSessionConfig
+)
+from verification_streaming_service import (
+    get_verification_streaming_manager,
+    StreamingVerificationStatus
 )
 import soundfile as sf
 
@@ -455,6 +460,246 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         monitor.close_connection(client_id)
         event_handler.cleanup_buffer(client_id)
         monitor.record_error(client_id, "connection_error")
+
+
+@app.websocket("/ws/verify/{phone_number}")
+async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
+    """
+    Real-time voice verification WebSocket endpoint
+    
+    Flow:
+    1. Connection starts, retrieves stored embedding for phone number
+    2. Client sends audio chunks (any size)
+    3. Chunks are accumulated until 5 seconds of audio is collected
+    4. Once 5 seconds accumulated:
+       - Merge all chunks
+       - Generate embedding
+       - Compare with stored embedding
+       - Return similarity score and chunk result
+    5. If ANY 5-second chunk FAILS to cross threshold -> return "unverified", stop (UPDATED)
+    6. If ALL 4 chunks (20 seconds total) PASS and cross threshold -> return "verified" (UPDATED)
+    7. If buffer < 5 seconds, client receives "buffering" status
+    
+    NEW VERIFICATION LOGIC (Stricter):
+    - ALL 4 chunks must successfully cross the threshold
+    - If even ONE chunk fails -> verification fails immediately
+    - Only when ALL 4 chunks pass -> verification succeeds
+    
+    Message format (from client):
+    {
+        "type": "audio",
+        "data": "<base64 encoded audio chunk>"
+    }
+    
+    Response format (to client) - Buffering status:
+    {
+        "type": "buffering",
+        "buffer_duration": 2.5,
+        "target_duration": 5.0
+    }
+    
+    Response format (to client) - Processed chunk:
+    {
+        "type": "chunk_result",
+        "chunk_number": 1,
+        "max_chunks": 4,
+        "similarity_score": 0.85,
+        "threshold": 0.75,
+        "is_match": true,
+        "final_status": "verified"  // Only when verification complete
+    }
+    """
+    client_id = f"verify-{phone_number}-{str(uuid.uuid4())[:8]}"
+    verification_manager = get_verification_streaming_manager()
+    session = None
+    
+    await websocket.accept()
+    logger.info(f"Verification WebSocket connection accepted: {client_id} for phone {phone_number}")
+    
+    try:
+        # Create verification session and retrieve enrolled embedding
+        logger.info(f"Creating verification session for phone: {phone_number}")
+        session = await verification_manager.create_session(phone_number, threshold=0.75)
+        
+        if session is None:
+            error_response = {
+                "type": "error",
+                "error": "phone_number_not_found",
+                "message": f"Phone number {phone_number} is not enrolled"
+            }
+            await websocket.send_json(error_response)
+            logger.warning(f"Phone number {phone_number} not found in database")
+            await websocket.close(code=4004, reason="Phone number not enrolled")
+            return
+        
+        # Send session created confirmation
+        init_response = {
+            "type": "session_ready",
+            "session_id": session.session_id,
+            "phone_number": phone_number,
+            "max_chunks": session.max_chunks,
+            "threshold": session.threshold
+        }
+        await websocket.send_json(init_response)
+        logger.info(f"Session initialized: {session}")
+        
+        # Process incoming audio chunks
+        while True:
+            try:
+                # Receive audio chunk from client
+                data = await websocket.receive_text()
+                message = json.loads(data)
+                
+                logger.debug(f"Received message type: {message.get('type')}")
+                
+                # Handle audio chunk
+                if message.get("type") == "audio":
+                    # Decode base64 audio data
+                    import base64
+                    try:
+                        audio_base64 = message.get("data", "")
+                        chunk_audio = base64.b64decode(audio_base64)
+                    except Exception as e:
+                        logger.error(f"Error decoding audio data: {str(e)}")
+                        error_response = {
+                            "type": "error",
+                            "error": "decode_error",
+                            "message": "Failed to decode audio data"
+                        }
+                        await websocket.send_json(error_response)
+                        continue
+                    
+                    # Process chunk
+                    result = await verification_manager.process_chunk(
+                        session.session_id,
+                        chunk_audio,
+                        sample_rate=16000
+                    )
+                    
+                    if result is None:
+                        error_response = {
+                            "type": "error",
+                            "error": "processing_error",
+                            "message": "Failed to process chunk"
+                        }
+                        await websocket.send_json(error_response)
+                        continue
+                    
+                    # Check for error in result
+                    if "error" in result:
+                        error_response = {
+                            "type": "error",
+                            "error": "chunk_error",
+                            "message": result.get("error"),
+                            "chunk_number": result.get("chunk_number")
+                        }
+                        await websocket.send_json(error_response)
+                        continue
+                    
+                    # Handle buffering status (accumulating audio, not yet processing)
+                    if result.get("type") == "buffering" or result.get("buffering"):
+                        buffering_response = {
+                            "type": "buffering",
+                            "buffer_duration": result.get("buffer_duration"),
+                            "target_duration": result.get("target_duration", 5.0)
+                        }
+                        await websocket.send_json(buffering_response)
+                        logger.debug(
+                            f"Audio buffering: {result.get('buffer_duration'):.2f}s / {result.get('target_duration', 5.0)}s"
+                        )
+                        continue
+                    
+                    # Send chunk result (when 5-second chunk has been processed)
+                    chunk_response = {
+                        "type": "chunk_result",
+                        "chunk_number": result["chunk_number"],
+                        "max_chunks": result["max_chunks"],
+                        "similarity_score": result["similarity_score"],
+                        "threshold": result["threshold"],
+                        "is_match": result["is_match"]
+                    }
+                    
+                    # Add final status if verification completed
+                    if result.get("final_status"):
+                        chunk_response["final_status"] = result["final_status"]
+                        chunk_response["verified_at_chunk"] = result.get("verified_at_chunk")
+                        
+                        # Log completion
+                        if result["final_status"] == "verified":
+                            logger.info(f"Verification SUCCESSFUL for {phone_number} at chunk {result.get('verified_at_chunk')}")
+                        else:
+                            logger.info(f"Verification FAILED for {phone_number} after {result['chunk_number']} chunks")
+                        
+                        # Send final response and close connection
+                        await websocket.send_json(chunk_response)
+                        await websocket.close(code=1000, reason=result["final_status"])
+                        break
+                    
+                    # Send partial result and continue
+                    await websocket.send_json(chunk_response)
+                
+                # Handle ping for keep-alive
+                elif message.get("type") == "ping":
+                    pong_response = {
+                        "type": "pong",
+                        "session_id": session.session_id
+                    }
+                    await websocket.send_json(pong_response)
+                
+                # Handle cancel request
+                elif message.get("type") == "cancel":
+                    await verification_manager.cancel_session(session.session_id)
+                    cancel_response = {
+                        "type": "cancelled",
+                        "session_id": session.session_id
+                    }
+                    await websocket.send_json(cancel_response)
+                    await websocket.close(code=1000, reason="cancelled")
+                    break
+                
+                else:
+                    unknown_response = {
+                        "type": "error",
+                        "error": "unknown_message_type",
+                        "message": f"Unknown message type: {message.get('type')}"
+                    }
+                    await websocket.send_json(unknown_response)
+            
+            except WebSocketDisconnect:
+                logger.info(f"Client {client_id} disconnected during verification")
+                verification_manager.cleanup_session(session.session_id)
+                break
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON from {client_id}: {str(e)}")
+                error_response = {
+                    "type": "error",
+                    "error": "invalid_json",
+                    "message": "Invalid JSON format"
+                }
+                try:
+                    await websocket.send_json(error_response)
+                except:
+                    break
+            except Exception as e:
+                logger.error(f"Error processing verification chunk: {str(e)}", exc_info=True)
+                error_response = {
+                    "type": "error",
+                    "error": "processing_error",
+                    "message": str(e)
+                }
+                try:
+                    await websocket.send_json(error_response)
+                except:
+                    break
+    
+    except WebSocketDisconnect:
+        logger.info(f"Client {client_id} disconnected")
+        if session:
+            verification_manager.cleanup_session(session.session_id)
+    except Exception as e:
+        logger.error(f"Verification WebSocket error: {str(e)}", exc_info=True)
+        if session:
+            verification_manager.cleanup_session(session.session_id)
 
 
 @app.get("/", response_model=HealthResponse)

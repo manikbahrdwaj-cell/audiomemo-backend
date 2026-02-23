@@ -12,6 +12,7 @@ import {
   VERIFICATION_STATUS,
   VERIFICATION_RESULT,
 } from '../services/verificationWebSocketService';
+import { encodeWAV } from '../utils/wavEncoder';
 
 function VerificationPageWebSocket() {
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -56,25 +57,19 @@ function VerificationPageWebSocket() {
   }, []);
 
   const handleChunkReady = async (chunkInfo) => {
-    // Convert Float32Array to Blob
-    const buffer = new ArrayBuffer(chunkInfo.samples.length * 2);
-    const view = new Int16Array(buffer);
-    for (let i = 0; i < chunkInfo.samples.length; i++) {
-      view[i] = Math.max(-1, Math.min(1, chunkInfo.samples[i])) * 0x7FFF;
-    }
-    
-    const blob = new Blob([buffer], { type: 'audio/wav' });
+    // Encode as proper WAV file with RIFF headers
+    const wavBlob = encodeWAV(chunkInfo.samples, chunkInfo.sampleRate);
     
     // Update chunks display
     setAudioChunks((prev) => [...prev, {
-      blob,
+      blob: wavBlob,
       chunkNumber: chunkInfo.chunkNumber,
       durationMs: chunkInfo.durationMs,
     }]);
 
     // Submit chunk to verification service
     try {
-      await verification.submitAudio(blob, true);
+      await verification.submitAudio(wavBlob, true);
       setTotalChunksGenerated(chunkInfo.chunkNumber);
     } catch (error) {
       console.error('Failed to submit chunk:', error);

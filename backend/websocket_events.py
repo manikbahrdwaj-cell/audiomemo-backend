@@ -7,7 +7,7 @@ import logging
 import base64
 import uuid
 import numpy as np
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from websocket_handler import (
@@ -15,7 +15,7 @@ from websocket_handler import (
     WebSocketMessageBuilder,
     ConnectionState
 )
-from voice_embedding import generate_embedding
+from voice_embedding import generate_embedding, generate_embedding_with_chunking, calculate_cosine_similarity
 from database import (
     store_voice_embedding, 
     find_nearest_embedding,
@@ -27,12 +27,93 @@ from database import (
 from chunk_progress_dispatcher import get_chunk_progress_dispatcher, ChunkProcessingStatus
 from embedding_similarity_operations import EmbeddingSimilarityCalculator
 from session_service import get_verified_session_manager
+from langchain_session_integration import get_langchain_session_integration
+from langchain_core.runnables import RunnableConfig
+import io
+import soundfile as sf
 
 logger = logging.getLogger(__name__)
 
 # Configuration
 SIMILARITY_THRESHOLD = 0.75
 MIN_AUDIO_SIZE = 1000  # bytes
+
+
+def calculate_chunk_similarities(
+    audio_data: bytes, 
+    enrolled_embedding: np.ndarray,
+    num_chunks: int = 3
+) -> List[Dict[str, Any]]:
+    """
+    Calculate similarity score for each audio chunk
+    
+    Args:
+        audio_data: Raw audio bytes
+        enrolled_embedding: Pre-computed enrolled embedding
+        num_chunks: Number of chunks to split audio into
+        
+    Returns:
+        List of chunk data with similarity scores
+    """
+    try:
+        # Load audio data
+        audio_buffer = io.BytesIO(audio_data)
+        audio_samples, sample_rate = sf.read(audio_buffer, dtype='float32')
+        
+        # Ensure mono audio
+        if len(audio_samples.shape) > 1:
+            audio_samples = audio_samples.mean(axis=1)
+        
+        # Calculate chunk size
+        chunk_size = len(audio_samples) // num_chunks
+        if chunk_size == 0:
+            return []
+        
+        chunks_data = []
+        
+        for i in range(num_chunks):
+            start_idx = i * chunk_size
+            end_idx = (i + 1) * chunk_size if i < num_chunks - 1 else len(audio_samples)
+            
+            chunk_samples = audio_samples[start_idx:end_idx]
+            
+            if len(chunk_samples) == 0:
+                continue
+            
+            # Generate embedding for this chunk
+            chunk_audio_bytes = io.BytesIO()
+            sf.write(chunk_audio_bytes, chunk_samples, sample_rate, format='WAV')
+            chunk_audio_bytes.seek(0)
+            
+            chunk_embedding = generate_embedding_with_chunking(
+                chunk_audio_bytes.read(),
+                chunk_size_seconds=5.0,
+                overlap_ratio=0.2,
+                aggregation_method='mean'
+            )
+            
+            if chunk_embedding is None:
+                continue
+            
+            # Calculate similarity
+            similarity = calculate_cosine_similarity(enrolled_embedding, chunk_embedding)
+            
+            chunks_data.append({
+                "chunk_number": i + 1,
+                "similarity": float(similarity),
+                "duration_seconds": len(chunk_samples) / sample_rate,
+                "start_sample": int(start_idx),
+                "end_sample": int(end_idx),
+            })
+        
+        return chunks_data
+        
+    except Exception as e:
+        logger.warning(f"Failed to calculate chunk similarities: {str(e)}")
+        return []
+
+
+# Configuration
 
 
 class AudioBuffer:
@@ -322,18 +403,42 @@ class WebSocketEventHandler:
                     similarity_metrics=comprehensive_metrics
                 )
                 
-                # Create LangChain session
+                # CREATE LANGCHAIN SESSION AFTER SUCCESSFUL VOICE MATCH
                 try:
-                    langgraph_session_id = session_manager.create_langgraph_session(verified_session)
-                    logger.info(f"Created LangGraph session: {langgraph_session_id}")
+                    integration = get_langchain_session_integration()
+                    
+                    # Create LangChain session with voice verification details
+                    session_result = integration.create_session_on_voice_match(
+                        phone_number=matched_phone_number,
+                        verification_score=similarity_score,
+                        similarity_metrics=comprehensive_metrics
+                    )
+                    
+                    if session_result['success']:
+                        langgraph_session_id = session_result['thread_id']
+                        langchain_session_id = session_result['session_id']
+                        logger.info(
+                            f"✓ Created LangChain session {langchain_session_id[:16]} "
+                            f"for {matched_phone_number}"
+                        )
+                    else:
+                        langgraph_session_id = None
+                        langchain_session_id = None
+                        logger.warning(
+                            f"Failed to create LangChain session: "
+                            f"{session_result.get('error', 'Unknown error')}"
+                        )
+                
                 except Exception as e:
-                    logger.warning(f"Failed to create LangGraph session: {str(e)}")
+                    logger.warning(f"Failed to create LangChain session: {str(e)}")
                     langgraph_session_id = None
+                    langchain_session_id = None
                 
                 # Store verified session in MongoDB
                 try:
                     session_doc = verified_session.to_dict()
                     session_doc["langgraph_session_id"] = langgraph_session_id
+                    session_doc["langchain_session_id"] = langchain_session_id
                     save_verified_session(session_doc)
                     logger.info(f"Stored verified session in MongoDB: {verified_session.session_id[:8]}")
                 except Exception as e:
@@ -343,10 +448,21 @@ class WebSocketEventHandler:
                 connection.set_state(ConnectionState.IDLE)
                 connection.set_metadata("verified_phone", matched_phone_number)
                 connection.set_metadata("session_id", verified_session.session_id)
+                connection.set_metadata("langchain_session_id", langchain_session_id)
                 connection.set_metadata("verified_at", datetime.now().isoformat())
                 
                 # Log before sending response
                 logger.info("Sending verification result to frontend: SUCCESS")
+                
+                # Calculate per-chunk similarities
+                enrolled_emb = np.array(result["embedding"], dtype=np.float32) if "embedding" in result else None
+                chunk_similarities = []
+                if enrolled_emb is not None:
+                    chunk_similarities = calculate_chunk_similarities(
+                        audio_data,
+                        enrolled_emb,
+                        num_chunks=3
+                    )
                 
                 # Build response with correct event name for frontend
                 result_message = {
@@ -360,10 +476,12 @@ class WebSocketEventHandler:
                         "phone_number": matched_phone_number,
                         "session_id": verified_session.session_id,
                         "langgraph_session_id": langgraph_session_id,
+                        "langchain_session_id": langchain_session_id,
                         "similarity_score": float(similarity_score),
                         "threshold": SIMILARITY_THRESHOLD,
                         "confidence": comprehensive_metrics.get("confidence", min(similarity_score * 100, 100.0)),
                         "metrics": comprehensive_metrics,
+                        "chunks": chunk_similarities,
                         "timestamp": datetime.now().isoformat()
                     },
                     "timestamp": datetime.now().isoformat()
@@ -382,6 +500,16 @@ class WebSocketEventHandler:
                 # Log before sending response
                 logger.info("Sending verification result to frontend: FAILED")
                 
+                # Calculate per-chunk similarities for failed verification too
+                enrolled_emb = np.array(result["embedding"], dtype=np.float32) if "embedding" in result else None
+                chunk_similarities = []
+                if enrolled_emb is not None:
+                    chunk_similarities = calculate_chunk_similarities(
+                        audio_data,
+                        enrolled_emb,
+                        num_chunks=3
+                    )
+                
                 # Build response with correct event name for frontend
                 result_message = {
                     "event": "verification_result",
@@ -397,6 +525,7 @@ class WebSocketEventHandler:
                         "threshold": SIMILARITY_THRESHOLD,
                         "confidence": comprehensive_metrics.get("confidence", min(similarity_score * 100, 100.0)),
                         "metrics": comprehensive_metrics,
+                        "chunks": chunk_similarities,
                         "timestamp": datetime.now().isoformat()
                     },
                     "timestamp": datetime.now().isoformat()
@@ -525,6 +654,129 @@ class WebSocketEventHandler:
             return WebSocketMessageBuilder.create_error_message(
                 "enrollment_error",
                 f"Enrollment failed: {str(e)}"
+            )
+    
+    async def handle_chat_message(
+        self, 
+        connection: ClientConnection,
+        message: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Handle chat messages from verified users
+        Integrates with LangChain sessions for conversation management
+        """
+        try:
+            # Get verified session info
+            langchain_session_id = connection.metadata.get("langchain_session_id")
+            phone_number = connection.metadata.get("verified_phone")
+            
+            if not langchain_session_id:
+                return WebSocketMessageBuilder.create_error_message(
+                    "no_session",
+                    "User not verified. Please complete voice verification first."
+                )
+            
+            # Extract message content
+            content = message.get("content", "").strip()
+            if not content:
+                return WebSocketMessageBuilder.create_error_message(
+                    "empty_message",
+                    "Message content is empty"
+                )
+            
+            # Get LangChain integration
+            integration = get_langchain_session_integration()
+            
+            # Add user message to session
+            user_message_added = integration.add_message_to_session(
+                session_id=langchain_session_id,
+                role="user",
+                content=content,
+                metadata={
+                    "source": "websocket",
+                    "client_id": connection.client_id,
+                    "phone_number": phone_number
+                }
+            )
+            
+            if not user_message_added:
+                logger.warning(f"Failed to add user message to session {langchain_session_id[:16]}")
+                return WebSocketMessageBuilder.create_error_message(
+                    "session_error",
+                    "Failed to store message in session"
+                )
+            
+            logger.info(
+                f"Added user message to session {langchain_session_id[:16]}: "
+                f"\"{content[:50]}...\""
+            )
+            
+            # Get session info for response
+            session_info = integration.get_session_info(langchain_session_id)
+            
+            return WebSocketMessageBuilder.create_success_message(
+                "message_received",
+                {
+                    "session_id": langchain_session_id,
+                    "phone_number": phone_number,
+                    "message": content,
+                    "status": "queued_for_processing",
+                    "session_info": {
+                        "current_turn": session_info.get("current_turn", 0) if session_info else 0,
+                        "status": session_info.get("status", "active") if session_info else "active"
+                    },
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+        
+        except Exception as e:
+            logger.error(f"Error handling chat message: {str(e)}", exc_info=True)
+            return WebSocketMessageBuilder.create_error_message(
+                "chat_error",
+                f"Error processing message: {str(e)}"
+            )
+    
+    async def handle_get_session(
+        self,
+        connection: ClientConnection
+    ) -> Dict[str, Any]:
+        """
+        Get current session information for a verified user
+        """
+        try:
+            langchain_session_id = connection.metadata.get("langchain_session_id")
+            phone_number = connection.metadata.get("verified_phone")
+            
+            if not langchain_session_id:
+                return WebSocketMessageBuilder.create_error_message(
+                    "no_session",
+                    "No active session"
+                )
+            
+            integration = get_langchain_session_integration()
+            session_info = integration.get_session_info(langchain_session_id)
+            
+            if not session_info:
+                return WebSocketMessageBuilder.create_error_message(
+                    "session_not_found",
+                    f"Session {langchain_session_id} not found"
+                )
+            
+            return WebSocketMessageBuilder.create_success_message(
+                "session_info",
+                {
+                    "session_id": langchain_session_id,
+                    "phone_number": phone_number,
+                    "session_data": session_info,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+        
+        except Exception as e:
+            logger.error(f"Error getting session info: {str(e)}")
+            return WebSocketMessageBuilder.create_error_message(
+                "session_error",
+                f"Error retrieving session: {str(e)}"
             )
     
     async def handle_ping(self, connection: ClientConnection) -> Dict[str, Any]:

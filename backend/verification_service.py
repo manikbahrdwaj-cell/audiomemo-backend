@@ -61,6 +61,19 @@ class VerificationChunk:
             f"has_embedding={self.embedding is not None})"
         )
 
+    def to_dict(self) -> dict:
+        """Convert chunk to dictionary for serialization"""
+        return {
+            "chunk_id": self.chunk_id,
+            "chunk_number": self.chunk_number,
+            "sample_rate": self.sample_rate,
+            "duration_seconds": float(self.duration_seconds),
+            "quality_score": float(self.quality_score),
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "embedding_timestamp": self.embedding_timestamp.isoformat() if self.embedding_timestamp else None,
+            "has_embedding": self.embedding is not None,
+        }
+
 
 @dataclass
 class VerificationSession:
@@ -380,6 +393,21 @@ class VerificationSession:
         self.completed_at = datetime.utcnow()
         
         return verified, similarity, message
+
+    def to_dict(self) -> dict:
+        """Convert verification session to dictionary for serialization"""
+        return {
+            "session_id": self.session_id,
+            "phone_number": self.phone_number,
+            "status": self.status.value,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "chunks": [chunk.to_dict() for chunk in self.chunks],
+            "similarity_scores": [float(s) for s in self.similarity_scores],
+            "final_similarity_score": float(self.final_similarity_score) if self.final_similarity_score is not None else None,
+            "verification_result": self.verification_result,
+        }
 
 
 # ========== SESSION MANAGEMENT ==========

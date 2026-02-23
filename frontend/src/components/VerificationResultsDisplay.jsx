@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import VerificationMetrics from './VerificationMetrics';
 import VerificationConfidence from './VerificationConfidence';
 import VerificationAttemptHistory from './VerificationAttemptHistory';
+import ChunkScoresChart from './ChunkScoresChart';
 
 /**
  * Comprehensive display for verification results
@@ -68,6 +69,7 @@ function VerificationResultsDisplay({ result, threshold, verificationError }) {
       <div className="flex gap-1 mb-6 border-b border-slate-200 dark:border-slate-700">
         {[
           { id: 'overview', label: 'Overview', icon: 'dashboard' },
+          { id: 'chunks', label: 'Chunks', icon: 'bar_chart' },
           { id: 'metrics', label: 'Metrics', icon: 'analytics' },
           { id: 'confidence', label: 'Confidence', icon: 'trending_up' },
           { id: 'history', label: 'Attempts', icon: 'history' },
@@ -232,6 +234,11 @@ function VerificationResultsDisplay({ result, threshold, verificationError }) {
               </div>
             )}
           </div>
+        )}
+
+        {/* Chunks Tab */}
+        {activeTab === 'chunks' && (
+          <ChunkScoresChart chunks={result.chunks} threshold={threshold} />
         )}
 
         {/* Metrics Tab */}

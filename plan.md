@@ -167,19 +167,19 @@ Frontend - Start Recording & Streaming
 Collect Results: [similarity_1, similarity_2, similarity_3, similarity_4]
         │
         ↓
-Apply Verification Logic
-├─→ matches = count(similarity_score >= 0.75)
-├─→ IF matches >= 1 THEN verify_success = True
-│   ELSE verify_success = False
+Apply Verification Logic (UPDATED: All Chunks Must Pass)
+├─→ For each chunk, check: similarity_score >= 0.75
+├─→ IF any chunk fails → verify_success = False, STOP
+├─→ IF all 4 chunks pass → verify_success = True
         │
         ↓
 Send Result to Frontend
 {
   status: 'verified' | 'failed',
-  confidence: max(similarity_scores),
+  confidence: min_or_avg(similarity_scores),
   details: {
-    chunk_scores: [0.82, 0.71, 0.78, 0.73],
-    matched_chunks: 2,
+    chunk_scores: [0.82, 0.81, 0.78, 0.83],
+    all_chunks_passed: true,
     threshold: 0.75
   }
 }

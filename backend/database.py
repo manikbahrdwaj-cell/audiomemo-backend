@@ -24,6 +24,7 @@ _collection = None
 _enrollment_sessions_collection = None
 _audio_chunks_collection = None
 _enrollment_history_collection = None
+_langchain_sessions_collection = None
 
 def get_database():
     """Get MongoDB database connection"""
@@ -881,3 +882,300 @@ def get_recent_verifications(limit: int = 20) -> List[Dict[str, Any]]:
         results.append(doc)
     
     return results
+
+
+# ========== LANGCHAIN SESSION STORAGE ==========
+
+def get_langchain_sessions_collection():
+    """Get LangChain sessions collection"""
+    global _langchain_sessions_collection, _db, _client
+    
+    if _langchain_sessions_collection is None:
+        if _db is None:
+            get_database()  # Initialize connection
+            _db = _client[DATABASE_NAME]
+        
+        _langchain_sessions_collection = _db["langchain_sessions"]
+        
+        # Create indexes for efficient querying
+        _langchain_sessions_collection.create_index("session_id", unique=True)
+        _langchain_sessions_collection.create_index("phone_number")
+        _langchain_sessions_collection.create_index("langgraph_thread_id")
+        _langchain_sessions_collection.create_index("session_status")
+        _langchain_sessions_collection.create_index("last_activity")
+        
+        # Create TTL index for automatic expiration (expire after 24 hours)
+        try:
+            _langchain_sessions_collection.create_index(
+                "start_time",
+                expireAfterSeconds=86400  # 24 hours
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create TTL index on start_time: {str(e)} (may already exist)")
+        
+        logger.info("LangChain sessions collection initialized")
+    
+    return _langchain_sessions_collection
+
+
+def save_langchain_session(session_data: Dict[str, Any]) -> str:
+    """
+    Save a LangChain session to MongoDB
+    
+    Args:
+        session_data: LangChain session data dictionary
+        
+    Returns:
+        Session document ID
+    """
+    collection = get_langchain_sessions_collection()
+    
+    # Ensure session_id is present
+    if "metadata" not in session_data:
+        raise ValueError("session_data must contain 'metadata'")
+    
+    if "session_id" not in session_data["metadata"]:
+        raise ValueError("metadata must contain 'session_id'")
+    
+    session_id = session_data["metadata"]["session_id"]
+    
+    # Ensure phone_number is in top level for easy querying
+    if "phone_number" not in session_data:
+        session_data["phone_number"] = session_data["metadata"].get("phone_number")
+    
+    # Ensure status is in top level
+    if "session_status" not in session_data:
+        session_data["session_status"] = session_data["metadata"].get("session_status")
+    
+    result = collection.update_one(
+        {"session_id": session_id},
+        {
+            "$set": {
+                **session_data,
+                "updated_at": datetime.utcnow()
+            },
+            "$setOnInsert": {
+                "created_at": datetime.utcnow()
+            }
+        },
+        upsert=True
+    )
+    
+    if result.upserted_id:
+        logger.info(
+            f"Created LangChain session {session_id[:16]} "
+            f"for {session_data.get('phone_number')}"
+        )
+        return str(result.upserted_id)
+    else:
+        doc = collection.find_one({"session_id": session_id})
+        logger.info(f"Updated LangChain session {session_id[:16]}")
+        return str(doc["_id"])
+
+
+def get_langchain_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve a LangChain session by ID
+    
+    Args:
+        session_id: The LangChain session ID
+        
+    Returns:
+        Session data dict or None if not found
+    """
+    collection = get_langchain_sessions_collection()
+    doc = collection.find_one({"session_id": session_id})
+    
+    if doc:
+        doc["_id"] = str(doc["_id"])
+        return doc
+    
+    return None
+
+
+def update_langchain_session_status(session_id: str, status: str) -> bool:
+    """
+    Update the status of a LangChain session
+    
+    Args:
+        session_id: The session ID
+        status: New status value
+        
+    Returns:
+        True if updated, False if not found
+    """
+    collection = get_langchain_sessions_collection()
+    
+    result = collection.update_one(
+        {"session_id": session_id},
+        {
+            "$set": {
+                "session_status": status,
+                "metadata.session_status": status,
+                "updated_at": datetime.utcnow()
+            }
+        }
+    )
+    
+    return result.modified_count > 0
+
+
+def add_conversation_turn(
+    session_id: str,
+    role: str,
+    content: str,
+    turn_metadata: Optional[Dict[str, Any]] = None
+) -> bool:
+    """
+    Add a conversation turn to LangChain session history
+    
+    Args:
+        session_id: The session ID
+        role: Role of speaker ("user" or "assistant")
+        content: Message content
+        turn_metadata: Optional metadata about the turn
+        
+    Returns:
+        True if added, False if session not found
+    """
+    collection = get_langchain_sessions_collection()
+    
+    turn = {
+        "role": role,
+        "content": content,
+        "timestamp": datetime.utcnow(),
+        "metadata": turn_metadata or {}
+    }
+    
+    result = collection.update_one(
+        {"session_id": session_id},
+        {
+            "$push": {
+                "metadata.conversation_history": turn,
+                "conversation_history": turn
+            },
+            "$inc": {
+                "metadata.current_turn": 1
+            },
+            "$set": {
+                "last_activity": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+        }
+    )
+    
+    return result.modified_count > 0
+
+
+def get_langchain_sessions_by_phone(phone_number: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Get all LangChain sessions for a phone number
+    
+    Args:
+        phone_number: The phone number
+        limit: Maximum results to return
+        
+    Returns:
+        List of session documents
+    """
+    collection = get_langchain_sessions_collection()
+    cursor = collection.find(
+        {"phone_number": phone_number}
+    ).sort("start_time", -1).limit(limit)
+    
+    results = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        results.append(doc)
+    
+    return results
+
+
+def get_active_langchain_sessions(status: str = "active", limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    Get all active LangChain sessions
+    
+    Args:
+        status: Session status to filter by
+        limit: Maximum results to return
+        
+    Returns:
+        List of session documents
+    """
+    collection = get_langchain_sessions_collection()
+    cursor = collection.find(
+        {"session_status": status}
+    ).sort("last_activity", -1).limit(limit)
+    
+    results = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        results.append(doc)
+    
+    return results
+
+
+def get_langchain_session_summary(session_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get a summary of a LangChain session
+    
+    Args:
+        session_id: The session ID
+        
+    Returns:
+        Session summary dict or None if not found
+    """
+    doc = get_langchain_session(session_id)
+    if not doc:
+        return None
+    
+    metadata = doc.get("metadata", {})
+    start_time = metadata.get("start_time", doc.get("start_time"))
+    end_time = metadata.get("end_time", doc.get("end_time"))
+    last_activity = metadata.get("last_activity", doc.get("last_activity"))
+    
+    # Calculate duration
+    if isinstance(start_time, datetime) and (isinstance(end_time, datetime) or end_time is None):
+        end = end_time or datetime.utcnow()
+        duration = (end - start_time).total_seconds()
+    else:
+        duration = 0
+    
+    return {
+        "session_id": session_id,
+        "phone_number": metadata.get("phone_number"),
+        "status": metadata.get("session_status"),
+        "thread_id": metadata.get("langgraph_thread_id"),
+        "verification_score": metadata.get("verification_score", 0.0),
+        "duration_seconds": duration,
+        "conversation_turns": metadata.get("current_turn", 0),
+        "messages": len(metadata.get("conversation_history", [])),
+        "started_at": start_time.isoformat() if isinstance(start_time, datetime) else start_time,
+        "last_activity": last_activity.isoformat() if isinstance(last_activity, datetime) else last_activity,
+        "voice_verified": metadata.get("voice_verified", True),
+        "created_at": doc.get("created_at"),
+        "updated_at": doc.get("updated_at")
+    }
+
+
+def delete_expired_langchain_sessions(ttl_seconds: int = 86400) -> int:
+    """
+    Delete expired LangChain sessions
+    
+    Args:
+        ttl_seconds: Sessions older than this are considered expired
+        
+    Returns:
+        Number of sessions deleted
+    """
+    collection = get_langchain_sessions_collection()
+    cutoff_time = datetime.utcnow() - __import__('datetime').timedelta(seconds=ttl_seconds)
+    
+    result = collection.delete_many({
+        "start_time": {"$lt": cutoff_time}
+    })
+    
+    if result.deleted_count > 0:
+        logger.info(f"Deleted {result.deleted_count} expired LangChain sessions")
+    
+    return result.deleted_count

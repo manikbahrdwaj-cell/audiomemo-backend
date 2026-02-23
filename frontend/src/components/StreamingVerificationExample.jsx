@@ -208,7 +208,7 @@ export function StreamingVerificationExample() {
             className="btn btn-primary"
           >
             <span className="btn-icon">🎤</span>
-            Start Recording
+            Receive Call
           </button>
 
           <button
@@ -314,7 +314,7 @@ export function StreamingVerificationExample() {
           <ol>
             <li>Wait for "Connected" status</li>
             <li>Enter phone number to verify</li>
-            <li>Click "Start Recording" and speak clearly</li>
+            <li>Click "Receive Call" and speak clearly</li>
             <li>Click "Stop Recording" when done</li>
             <li>Click "Verify" to process the audio</li>
             <li>Wait for verification result</li>

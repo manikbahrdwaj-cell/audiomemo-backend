@@ -10,6 +10,12 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
+from langchain_session_service import (
+    get_langchain_session_manager,
+    LangChainSession,
+    LangChainSessionManager
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -136,22 +142,37 @@ class VerifiedSessionManager:
             LangGraph session ID
         """
         try:
-            # For now, generate a simple session ID
-            # In production, this would integrate with actual LangChain/LangGraph
-            langgraph_session_id = f"lg_{verified_session.session_id}_{int(datetime.utcnow().timestamp())}"
+            # Get LangChain session manager
+            lc_manager = get_langchain_session_manager()
             
-            verified_session.langgraph_session_id = langgraph_session_id
+            # Create LangChain session with verification details
+            lc_session = lc_manager.create_session(
+                phone_number=verified_session.phone_number,
+                verification_score=verified_session.verification_score,
+                session_status="active",
+                custom_metadata={
+                    "voice_verified": True,
+                    "verification_timestamp": verified_session.verified_at.isoformat() if verified_session.verified_at else None,
+                    "initial_verification_score": verified_session.verification_score,
+                    "cosine_similarity": verified_session.cosine_similarity,
+                    "confidence": verified_session.confidence
+                }
+            )
+            
+            # Update verified session with LangChain session ID
+            verified_session.langgraph_session_id = lc_session.metadata.session_id
             verified_session.session_status = SessionStatus.ACTIVE.value
             
             logger.info(
-                f"Created LangGraph session {langgraph_session_id[:20]} "
+                f"Created LangChain session {lc_session.metadata.session_id[:16]} "
+                f"(thread: {lc_session.metadata.langgraph_thread_id[:16]}) "
                 f"for verified session {verified_session.session_id[:8]}"
             )
             
-            return langgraph_session_id
+            return lc_session.metadata.session_id
         
         except Exception as e:
-            logger.error(f"Error creating LangGraph session: {str(e)}")
+            logger.error(f"Error creating LangChain session: {str(e)}")
             raise
     
     def get_session(self, session_id: str) -> Optional[VerifiedSession]:

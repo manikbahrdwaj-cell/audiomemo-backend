@@ -1,7 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import EnrollmentPage from './components/EnrollmentPage';
-import VerificationPage from './components/VerificationPage';
+import VerificationPageRealtime from './components/VerificationPageRealtime';
 import './App.css';
 import './styles/verification-results.css';
 
@@ -51,7 +51,7 @@ function App() {
       <Navigation />
       <Routes>
         <Route path="/" element={<EnrollmentPage />} />
-        <Route path="/verify" element={<VerificationPage />} />
+        <Route path="/verify" element={<VerificationPageRealtime />} />
       </Routes>
     </Router>
   );

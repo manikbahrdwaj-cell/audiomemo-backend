@@ -172,7 +172,7 @@ class AudioChunkingService {
     }
 
     // Extract audio data from input channel
-    const inputData = event.inputData.getChannelData(0);
+    const inputData = event.inputBuffer.getChannelData(0);
 
     // Convert to regular array and add to buffer
     for (let i = 0; i < inputData.length; i++) {

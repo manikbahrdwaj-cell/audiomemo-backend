@@ -18,6 +18,19 @@ function VoiceSampleCard({ sampleNumber, onAudioRecorded, audioBlob, isRecording
   const audioRef = useRef(null);
   const urlRef = useRef(null);
 
+  // Sample paragraphs for each sample number
+  const SAMPLE_PARAGRAPHS = {
+    1: "The quick brown fox jumps over the lazy dog. This is a pangram that contains every letter of the English alphabet.",
+    2: "She sells seashells by the seashore. The shells she sells are surely seashells.",
+    3: "Peter Piper picked a peck of pickled peppers. A peck of pickled peppers Peter Piper picked.",
+    4: "How much wood would a woodchuck chuck if a woodchuck could chuck wood? Wood would a woodchuck chuck.",
+    5: "Please speak clearly and naturally. This sample will help create a unique voice profile for verification.",
+  };
+
+  const getSampleParagraph = () => {
+    return SAMPLE_PARAGRAPHS[sampleNumber] || '';
+  };
+
   // Manage audio URL creation and cleanup
   useEffect(() => {
     if (audioBlob) {
@@ -199,6 +212,23 @@ function VoiceSampleCard({ sampleNumber, onAudioRecorded, audioBlob, isRecording
           <span className="text-xs font-medium">{getStatusText()}</span>
         </div>
       </div>
+
+      {/* Sample Paragraph - displayed when recording */}
+      {localIsRecording && (
+        <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/30 border-2 border-blue-300 dark:border-blue-600 rounded-lg">
+          <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2 text-center">
+            📝 Please speak the following paragraph clearly:
+          </p>
+          <div className="p-3 bg-white dark:bg-slate-800 rounded border border-blue-200 dark:border-blue-700">
+            <p className="text-sm text-center text-gray-800 dark:text-gray-200 font-medium leading-relaxed italic">
+              "{getSampleParagraph()}"
+            </p>
+          </div>
+          <p className="text-xs text-gray-600 dark:text-gray-400 mt-2 text-center">
+            Speak naturally and clearly for best results.
+          </p>
+        </div>
+      )}
 
       {/* Recording Time Information */}
       {(localIsRecording || audioBlob) && (
