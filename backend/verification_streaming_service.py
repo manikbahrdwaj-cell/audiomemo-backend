@@ -250,6 +250,13 @@ class RealtimeVerificationManager:
                 )
                 session.chunk_results.append(result)
                 
+                # Log this chunk's result (no early return - always continue)
+                chunk_status = "✓ PASS" if result.is_match else "✗ FAIL"
+                logger.info(
+                    f"Chunk {session.chunks_processed}/{session.max_chunks} {chunk_status} - "
+                    f"Similarity: {similarity_score:.4f} (Threshold: {session.threshold:.2f})"
+                )
+                
                 # Clear buffer for next 5-second accumulation
                 session.audio_buffer = []
                 session.buffer_duration_seconds = 0.0
@@ -265,49 +272,68 @@ class RealtimeVerificationManager:
                     "final_status": None
                 }
                 
-                # NEW LOGIC: All chunks must pass - if ANY fails, verification fails immediately
-                if not result.is_match:
-                    # Chunk failed threshold - verification fails immediately
-                    session.final_status = "unverified"
-                    session.verified_at_chunk = None
-                    session.status = StreamingVerificationStatus.UNVERIFIED
-                    response["final_status"] = "unverified"
-                    logger.info(
-                        f"Session {session_id[:8]} FAILED at chunk {session.chunks_processed} "
-                        f"(similarity {similarity_score:.4f} below threshold {session.threshold:.2f})"
-                    )
-                    # Save to database
-                    self._save_session_to_database(session)
-                
-                # Check if all chunks have been processed
-                elif session.chunks_processed >= session.max_chunks:
-                    # All chunks processed - verify that ALL chunks matched
+                # REFACTORED: Process ALL chunks before deciding final result
+                # No early return - continue processing until max_chunks reached
+                if session.chunks_processed >= session.max_chunks:
+                    # All chunks have been processed - now evaluate final result
                     all_chunks_matched = all(result.is_match for result in session.chunk_results)
                     
+                    # Log all chunk results for debugging
+                    logger.info(
+                        f"\n{'='*70}"
+                    )
+                    logger.info(f"Session {session_id[:8]} - Final Verification Report")
+                    logger.info(f"{'='*70}")
+                    logger.info(f"Total Chunks Processed: {session.chunks_processed}/{session.max_chunks}")
+                    logger.info(f"Threshold: {session.threshold:.2f}")
+                    logger.info(f"\nIndividual Chunk Results:")
+                    
+                    # Log each chunk's pass/fail status
+                    for i, chunk_result in enumerate(session.chunk_results, 1):
+                        status_symbol = "✓" if chunk_result.is_match else "✗"
+                        chunk_status_text = "PASS" if chunk_result.is_match else "FAIL"
+                        logger.info(
+                            f"  {status_symbol} Chunk {i}: {chunk_status_text} "
+                            f"(Score: {chunk_result.similarity_score:.4f})"
+                        )
+                    
+                    # Determine final verification result
                     if all_chunks_matched:
                         session.final_status = "verified"
                         session.verified_at_chunk = session.chunks_processed
                         session.status = StreamingVerificationStatus.VERIFIED
                         response["final_status"] = "verified"
+                        
                         logger.info(
-                            f"Session {session_id[:8]} VERIFIED - All {session.chunks_processed} chunks matched! "
-                            f"Similarity scores: {[f'{r.similarity_score:.4f}' for r in session.chunk_results]}"
+                            f"\n✓ VERIFICATION SUCCESSFUL - All {session.chunks_processed} chunks matched!"
+                        )
+                        logger.info(
+                            f"  Average Similarity: "
+                            f"{np.mean([r.similarity_score for r in session.chunk_results]):.4f}"
                         )
                     else:
-                        # This shouldn't happen with the new logic, but keep for safety
                         session.final_status = "unverified"
                         session.verified_at_chunk = None
                         session.status = StreamingVerificationStatus.UNVERIFIED
                         response["final_status"] = "unverified"
-                        logger.warning(
-                            f"Session {session_id[:8]} - All chunks processed but not all matched"
+                        
+                        # Count how many chunks failed
+                        failed_count = sum(1 for r in session.chunk_results if not r.is_match)
+                        logger.info(
+                            f"\n✗ VERIFICATION FAILED - {failed_count}/{session.chunks_processed} chunk(s) did not match"
                         )
+                        logger.info(
+                            f"  Minimum Similarity: "
+                            f"{min(r.similarity_score for r in session.chunk_results):.4f}"
+                        )
+                    
+                    logger.info(f"{'='*70}\n")
                     
                     # Save to database
                     self._save_session_to_database(session)
-                
-                # Continue recording if not yet verified or reached max chunks
-                session.status = StreamingVerificationStatus.RECORDING
+                else:
+                    # More chunks still needed, continue recording
+                    session.status = StreamingVerificationStatus.RECORDING
                 
                 return response
                 
