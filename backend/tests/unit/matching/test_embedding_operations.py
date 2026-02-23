@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Import embedding modules
-from voice_embedding import (
+from audio.voice_embedding import (
     generate_embedding,
     generate_embedding_with_chunking,
     get_embedding_with_auto_chunking,
@@ -26,7 +26,7 @@ from voice_embedding import (
     compare_embeddings_with_chunks
 )
 
-from embedding_operations import (
+from matching.embedding_operations import (
     EmbeddingMetrics,
     EmbeddingStats,
     EmbeddingComparator,

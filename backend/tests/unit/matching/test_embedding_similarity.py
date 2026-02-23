@@ -6,7 +6,7 @@ Tests cosine similarity, batch operations, clustering, and advanced metrics
 
 import numpy as np
 import logging
-from embedding_similarity_operations import (
+from matching.embedding_similarity_operations import (
     EmbeddingSimilarityCalculator,
     SimilarityResult,
     SimilarityMatrix,

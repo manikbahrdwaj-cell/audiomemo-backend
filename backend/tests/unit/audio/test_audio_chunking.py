@@ -23,7 +23,7 @@ def test_imports():
     print("="*60)
     
     try:
-        from audio_chunking import (
+        from audio.audio_chunking import (
             ChunkConfig,
             AudioChunker,
             EmbeddingAggregator,
@@ -31,7 +31,7 @@ def test_imports():
         )
         print("✓ audio_chunking module imported successfully")
         
-        from voice_embedding import (
+        from audio.voice_embedding import (
             preprocess_audio,
             generate_embedding,
             generate_embedding_with_chunking,
@@ -55,7 +55,7 @@ def test_chunk_config():
     print("="*60)
     
     try:
-        from audio_chunking import ChunkConfig
+        from audio.audio_chunking import ChunkConfig
         
         # Valid config
         config = ChunkConfig(
@@ -90,7 +90,7 @@ def test_audio_chunker():
     print("="*60)
     
     try:
-        from audio_chunking import AudioChunker, ChunkConfig
+        from audio.audio_chunking import AudioChunker, ChunkConfig
         import torch
         
         config = ChunkConfig(chunk_size=16000, overlap_ratio=0.2)
@@ -138,7 +138,7 @@ def test_aggregator():
     print("="*60)
     
     try:
-        from audio_chunking import EmbeddingAggregator
+        from audio.audio_chunking import EmbeddingAggregator
         
         aggregator = EmbeddingAggregator()
         
@@ -179,7 +179,7 @@ def test_chunk_processor():
     print("="*60)
     
     try:
-        from audio_chunking import ChunkProcessor
+        from audio.audio_chunking import ChunkProcessor
         
         processor = ChunkProcessor()
         
@@ -230,7 +230,7 @@ def test_voice_embedding_functions():
     print("="*60)
     
     try:
-        from voice_embedding import (
+        from audio.voice_embedding import (
             preprocess_audio,
             generate_embedding,
             generate_embedding_with_chunking,

@@ -11,14 +11,14 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from matching_logic import (
+from matching.matching_logic import (
     MatchingComparator,
     MatchingStrategy,
     MatchingResult,
     get_matching_comparator,
     reset_matching_comparator
 )
-from verification_service import (
+from services.verification import (
     get_verification_manager,
     VerificationSessionConfig,
     VerificationResult,

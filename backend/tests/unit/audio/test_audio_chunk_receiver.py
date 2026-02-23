@@ -5,7 +5,7 @@ Verifies chunk merging and embedding generation
 
 import numpy as np
 import pytest
-from audio_chunk_receiver import (
+from audio.audio_chunk_receiver import (
     AudioChunkReceiver,
     ChunkReceiverSession,
     ChunkReceiverStatus,
