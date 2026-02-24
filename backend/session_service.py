@@ -1,6 +1,6 @@
 """
 Session Service Module
-Manages verified session creation and LangChain session integration
+Manages verified session creation
 """
 
 import logging
@@ -9,12 +9,6 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 from enum import Enum
-
-from langchain_session_service import (
-    get_langchain_session_manager,
-    LangChainSession,
-    LangChainSessionManager
-)
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +32,7 @@ class VerifiedSession:
     created_at: datetime = field(default_factory=datetime.utcnow)
     verified_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
-    
-    # LangChain integration
-    langgraph_session_id: Optional[str] = None  # Reference to LangChain session
-    
+
     # Verification details
     embedded_phone_number: Optional[str] = None  # The embedded phone number used for comparison
     similarity_score: float = 0.0
@@ -64,7 +55,6 @@ class VerifiedSession:
             "created_at": self.created_at,
             "verified_at": self.verified_at,
             "expires_at": self.expires_at,
-            "langgraph_session_id": self.langgraph_session_id,
             "embedded_phone_number": self.embedded_phone_number,
             "similarity_score": self.similarity_score,
             "cosine_similarity": self.cosine_similarity,
@@ -130,50 +120,6 @@ class VerifiedSessionManager:
         )
         
         return session
-    
-    def create_langgraph_session(self, verified_session: VerifiedSession) -> str:
-        """
-        Create a LangChain/LangGraph session for the verified user
-        
-        Args:
-            verified_session: The verified session
-            
-        Returns:
-            LangGraph session ID
-        """
-        try:
-            # Get LangChain session manager
-            lc_manager = get_langchain_session_manager()
-            
-            # Create LangChain session with verification details
-            lc_session = lc_manager.create_session(
-                phone_number=verified_session.phone_number,
-                verification_score=verified_session.verification_score,
-                session_status="active",
-                custom_metadata={
-                    "voice_verified": True,
-                    "verification_timestamp": verified_session.verified_at.isoformat() if verified_session.verified_at else None,
-                    "initial_verification_score": verified_session.verification_score,
-                    "cosine_similarity": verified_session.cosine_similarity,
-                    "confidence": verified_session.confidence
-                }
-            )
-            
-            # Update verified session with LangChain session ID
-            verified_session.langgraph_session_id = lc_session.metadata.session_id
-            verified_session.session_status = SessionStatus.ACTIVE.value
-            
-            logger.info(
-                f"Created LangChain session {lc_session.metadata.session_id[:16]} "
-                f"(thread: {lc_session.metadata.langgraph_thread_id[:16]}) "
-                f"for verified session {verified_session.session_id[:8]}"
-            )
-            
-            return lc_session.metadata.session_id
-        
-        except Exception as e:
-            logger.error(f"Error creating LangChain session: {str(e)}")
-            raise
     
     def get_session(self, session_id: str) -> Optional[VerifiedSession]:
         """

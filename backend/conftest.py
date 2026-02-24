@@ -1,3 +1,5 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 """
 Pytest Configuration and Shared Fixtures
 Contains fixtures, hooks, and configuration shared across all tests
@@ -250,7 +252,7 @@ def orthogonal_embeddings():
 @pytest.fixture
 def mock_mongodb():
     """Provide mocked MongoDB connection"""
-    with patch('database.MongoClient') as mock_client:
+    with patch('app.db.connection.MongoClient') as mock_client:
         mock_db = MagicMock()
         mock_collection = MagicMock()
         
@@ -268,7 +270,7 @@ def mock_mongodb():
 @pytest.fixture
 def mock_voice_embedding():
     """Provide mocked voice embedding module"""
-    with patch('voice_embedding.get_model') as mock_get_model:
+    with patch('app.ml.embedding.get_model') as mock_get_model:
         mock_model = MagicMock()
         mock_get_model.return_value = mock_model
         
