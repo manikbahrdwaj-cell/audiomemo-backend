@@ -1,6 +1,6 @@
 # Backend Refactoring Plan
 
-> **Scope:** Restructure `backend/` into a proper `app/` package layout.
+> **Scope:** ;;Restructure `backend/` into a proper `app/` package layout.
 > LangChain / LLM files are **excluded** from this refactor (deferred).
 > Each section below is a self-contained JSON prompt you can feed directly to a coding model.
 
