@@ -29,5 +29,7 @@ dist/
 *.log
 npm-debug.log*
 
-# misc
+# Cache
 .cache/
+
+backend/.venv/

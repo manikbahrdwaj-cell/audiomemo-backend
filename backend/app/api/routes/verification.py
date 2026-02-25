@@ -5,7 +5,8 @@ from app.models.verification import (
     VerificationSessionResponse,
     VerificationChunkAddResponse,
     VerificationFinalizeResponse,
-    VerifyResponse
+    VerificationResult,
+    VerificationSessionConfig
 )
 from app.services.verification import (
     get_verification_manager,
