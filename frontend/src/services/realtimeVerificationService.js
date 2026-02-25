@@ -100,6 +100,25 @@ class RealtimeVerificationService extends EventEmitter {
 
         this.ws.onclose = (event) => {
           console.log(`[RealTimeVerification] Connection closed. Code: ${event.code}, Reason: ${event.reason}`);
+          // Null out the reference so sendAudioChunk detects the close immediately
+          this.ws = null;
+
+          const wasCompleted =
+            this.status === REALTIME_VERIFICATION_STATUS.COMPLETED ||
+            this.status === REALTIME_VERIFICATION_STATUS.VERIFIED ||
+            this.status === REALTIME_VERIFICATION_STATUS.UNVERIFIED;
+
+          if (!wasCompleted) {
+            // Unexpected close mid-session — surface it as an error
+            const reason = event.reason || `WebSocket closed (code ${event.code})`;
+            this.status = REALTIME_VERIFICATION_STATUS.ERROR;
+            this.verificationError = reason;
+            this.emit(REALTIME_VERIFICATION_EVENTS.ERROR, {
+              error: 'connection_closed',
+              message: 'Connection lost unexpectedly. Please try again.',
+            });
+          }
+
           this.emit(REALTIME_VERIFICATION_EVENTS.CONNECTION_CLOSED, {
             code: event.code,
             reason: event.reason,
@@ -141,42 +160,58 @@ class RealtimeVerificationService extends EventEmitter {
    * @returns {Promise<void>}
    */
   async sendAudioChunk(audioData) {
+    // Helper: check whether the connection is actually usable right now.
+    const isOpen = () => this.ws && this.ws.readyState === WebSocket.OPEN;
+
     return new Promise((resolve, reject) => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        try {
-          // Backend expects raw binary WAV frames, not JSON/base64
+      if (!isOpen()) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+
+      try {
+        if (audioData instanceof ArrayBuffer) {
+          // Synchronous path — no FileReader, no race window.
+          if (!isOpen()) { reject(new Error('WebSocket not connected')); return; }
+          this.ws.send(audioData);
+          this.status = REALTIME_VERIFICATION_STATUS.PROCESSING;
+          console.log('[RealTimeVerification] Sent audio chunk (ArrayBuffer, bytes:', audioData.byteLength, ')');
+          resolve();
+          return;
+        }
+
+        if (audioData instanceof Blob) {
+          // Async FileReader path — re-check connection inside onload because
+          // ws.onclose may fire and null out this.ws while the FileReader runs.
           const reader = new FileReader();
+
           reader.onload = () => {
             const arrayBuffer = reader.result;
-
-            // Send as binary directly so backend processes it as a WAV audio frame
-            this.ws.send(arrayBuffer);
-            this.status = REALTIME_VERIFICATION_STATUS.PROCESSING;
-            console.log('[RealTimeVerification] Sent audio chunk (binary, bytes:', arrayBuffer.byteLength, ')');
-            resolve();
+            // Re-check: onclose may have nulled this.ws during the async read.
+            if (!isOpen()) {
+              reject(new Error('WebSocket not connected'));
+              return;
+            }
+            try {
+              this.ws.send(arrayBuffer);
+              this.status = REALTIME_VERIFICATION_STATUS.PROCESSING;
+              console.log('[RealTimeVerification] Sent audio chunk (binary, bytes:', arrayBuffer.byteLength, ')');
+              resolve();
+            } catch (sendErr) {
+              console.error('[RealTimeVerification] Error during ws.send:', sendErr);
+              reject(sendErr);
+            }
           };
 
-          reader.onerror = () => {
-            reject(new Error('Failed to read audio data'));
-          };
-
-          if (audioData instanceof Blob) {
-            reader.readAsArrayBuffer(audioData);
-          } else if (audioData instanceof ArrayBuffer) {
-            // Already an ArrayBuffer — send directly without re-reading
-            this.ws.send(audioData);
-            this.status = REALTIME_VERIFICATION_STATUS.PROCESSING;
-            console.log('[RealTimeVerification] Sent audio chunk (ArrayBuffer, bytes:', audioData.byteLength, ')');
-            resolve();
-          } else {
-            reject(new Error('Invalid audio data type'));
-          }
-        } catch (e) {
-          console.error('[RealTimeVerification] Error sending chunk:', e);
-          reject(e);
+          reader.onerror = () => reject(new Error('Failed to read audio data'));
+          reader.readAsArrayBuffer(audioData);
+          return;
         }
-      } else {
-        reject(new Error('WebSocket not connected'));
+
+        reject(new Error('Invalid audio data type'));
+      } catch (e) {
+        console.error('[RealTimeVerification] Error sending chunk:', e);
+        reject(e);
       }
     });
   }

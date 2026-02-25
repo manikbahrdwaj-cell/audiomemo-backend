@@ -50,6 +50,9 @@ export function useRealtimeVerification() {
 
       const service = serviceRef.current;
 
+      // Clear any listeners from a previous session before re-registering
+      service.removeAllListeners();
+
       // Setup event listeners
       service.on(REALTIME_VERIFICATION_EVENTS.SESSION_CREATED, (data) => {
         console.log('[useRealtimeVerification] Session created:', data);
@@ -83,7 +86,8 @@ export function useRealtimeVerification() {
       service.on(REALTIME_VERIFICATION_EVENTS.ERROR, (data) => {
         console.error('[useRealtimeVerification] Error:', data);
         setStatus(REALTIME_VERIFICATION_STATUS.ERROR);
-        setIsVerified(false);
+        // Do NOT set isVerified=false here — that would make isComplete=true and
+        // stop recording on a transient error. Only UNVERIFIED sets isVerified=false.
         setError(data.message || 'Verification error');
       });
 
