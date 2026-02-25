@@ -3,22 +3,18 @@ from app.models.verification import (
     VerificationSessionResponse,
     VerificationChunkAddResponse,
     VerificationFinalizeResponse,
-    VerificationResult,
-    VerificationStatus,
-    VerificationSessionConfig
+    VerifyResponse
 )
 from app.services.verification import (
     get_verification_manager,
     create_verification_session,
     get_verification_session,
-    add_audio_chunk,
-    finalize_verification,
-    verify_voice,
-    get_verification_service
+    add_verification_chunk,
+    process_verification_session,
+    VerificationSessionConfig
 )
 from app.services.verification_streaming import (
-    get_streaming_verification_service,
-    StreamingVerificationConfig
+    get_verification_streaming_manager
 )
 from app.db.embeddings import get_voice_embedding, check_enrollment
 from app.ml.embedding import generate_embedding, calculate_cosine_similarity
@@ -87,9 +83,7 @@ async def create_new_verification_session(
     
     # Create session configuration
     config = VerificationSessionConfig(
-        max_chunks=max_chunks,
-        merge_embeddings=merge_embeddings,
-        store_chunks=True
+        max_chunks=max_chunks
     )
     
     # Create session
@@ -130,9 +124,6 @@ async def add_audio_chunk_to_verification_session(
     Returns:
         VerificationChunkAddResponse with chunk details and session status
     """
-    from app.db.embeddings import check_enrollment
-    from app.services.verification import get_verification_session
-    from app.services.verification import add_audio_chunk
     import soundfile as sf
     import numpy as np
     import io
@@ -180,7 +171,7 @@ async def add_audio_chunk_to_verification_session(
         quality_score = max(0.0, min(1.0, quality_score))
         
         # Add chunk to session
-        success, message, chunk = add_audio_chunk(
+        success, message, chunk = add_verification_chunk(
             session_id,
             audio_data,
             duration_seconds,
@@ -274,9 +265,6 @@ async def finalize_verification_session(session_id: str, force_single: bool = Fa
     Returns:
         VerificationFinalizeResponse with verification result
     """
-    from app.services.verification import get_verification_session, finalize_verification
-    from app.services.verification import get_verification_service
-    
     session = get_verification_session(session_id)
     if not session:
         raise HTTPException(
@@ -285,9 +273,9 @@ async def finalize_verification_session(session_id: str, force_single: bool = Fa
         )
     
     try:
-        success, message, result = finalize_verification(session_id, force_single)
+        verified, similarity, message = process_verification_session(session_id)
         
-        if not success:
+        if session.status.value == "failed":
             raise HTTPException(
                 status_code=400,
                 detail=message
@@ -297,8 +285,12 @@ async def finalize_verification_session(session_id: str, force_single: bool = Fa
             success=True,
             message=message,
             phone_number=session.phone_number,
-            verification_result=result,
             chunks_processed=len(session.chunks),
+            average_similarity=float(similarity),
+            min_similarity=float(similarity),
+            max_similarity=float(similarity),
+            threshold=session.config.verification_threshold,
+            is_match=verified,
             verification_status=session.status.value
         )
         
@@ -311,7 +303,7 @@ async def finalize_verification_session(session_id: str, force_single: bool = Fa
         )
 
 
-@router.post("/verification/verify", response_model=VerificationResult)
+@router.post("/verification/verify", response_model=VerifyResponse)
 async def verify_voice_from_enrollment(
     phone_number: str,
     file: UploadFile = File(..., description="WAV audio file to verify"),
@@ -333,7 +325,7 @@ async def verify_voice_from_enrollment(
         VerificationResult with verification details
     """
     from app.db.embeddings import check_enrollment
-    from app.services.verification import verify_voice
+    import numpy as np
     
     # Check if phone number is enrolled
     is_enrolled = check_enrollment(phone_number)
@@ -360,10 +352,24 @@ async def verify_voice_from_enrollment(
                 detail="Audio file too small. Please record a longer sample."
             )
         
-        # Process verification
-        result = verify_voice(phone_number, audio_bytes, quality_score)
+        # Generate embedding and compare against enrolled voice
+        THRESHOLD = 0.75
+        query_embedding = generate_embedding(audio_bytes)
+        enrolled_embedding = get_voice_embedding(phone_number)
+        if enrolled_embedding is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No enrolled embedding found for {phone_number}"
+            )
+        similarity = calculate_cosine_similarity(np.array(enrolled_embedding), query_embedding)
         
-        return result
+        return VerifyResponse(
+            success=True,
+            phone_number=phone_number,
+            similarity_score=float(similarity),
+            is_match=bool(similarity >= THRESHOLD),
+            threshold=THRESHOLD
+        )
         
     except HTTPException:
         raise
@@ -459,7 +465,7 @@ async def websocket_voice_endpoint(websocket: WebSocket, phone_number: str):
         phone_number: Phone number to verify (must be enrolled)
     """
     from app.websocket.manager import ConnectionManager
-    from app.services.verification_streaming import get_streaming_verification_service
+    from app.services.verification_streaming import get_verification_streaming_manager
     from app.db.embeddings import check_enrollment
     
     # Check if phone number is enrolled
@@ -477,7 +483,7 @@ async def websocket_voice_endpoint(websocket: WebSocket, phone_number: str):
     
     try:
         # Initialize streaming verification service
-        streaming_service = get_streaming_verification_service()
+        streaming_service = get_verification_streaming_manager()
         
         # Process messages
         while True:
@@ -515,7 +521,7 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
         phone_number: Phone number to verify (must be enrolled)
     """
     from app.websocket.manager import ConnectionManager
-    from app.services.verification_streaming import get_streaming_verification_service
+    from app.services.verification_streaming import get_verification_streaming_manager
     from app.db.embeddings import check_enrollment
     
     # Check if phone number is enrolled
@@ -533,7 +539,7 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
     
     try:
         # Initialize streaming verification service
-        streaming_service = get_streaming_verification_service()
+        streaming_service = get_verification_streaming_manager()
         
         # Process messages
         while True:
