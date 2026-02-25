@@ -144,22 +144,15 @@ class RealtimeVerificationService extends EventEmitter {
     return new Promise((resolve, reject) => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         try {
-          // Convert to base64
+          // Backend expects raw binary WAV frames, not JSON/base64
           const reader = new FileReader();
           reader.onload = () => {
             const arrayBuffer = reader.result;
-            const uint8Array = new Uint8Array(arrayBuffer);
-            const binaryString = String.fromCharCode.apply(null, uint8Array);
-            const base64Data = btoa(binaryString);
 
-            const message = {
-              type: 'audio',
-              data: base64Data,
-            };
-
-            this.ws.send(JSON.stringify(message));
+            // Send as binary directly so backend processes it as a WAV audio frame
+            this.ws.send(arrayBuffer);
             this.status = REALTIME_VERIFICATION_STATUS.PROCESSING;
-            console.log('[RealTimeVerification] Sent audio chunk');
+            console.log('[RealTimeVerification] Sent audio chunk (binary, bytes:', arrayBuffer.byteLength, ')');
             resolve();
           };
 
@@ -170,7 +163,11 @@ class RealtimeVerificationService extends EventEmitter {
           if (audioData instanceof Blob) {
             reader.readAsArrayBuffer(audioData);
           } else if (audioData instanceof ArrayBuffer) {
-            reader.readAsArrayBuffer(new Blob([audioData]));
+            // Already an ArrayBuffer — send directly without re-reading
+            this.ws.send(audioData);
+            this.status = REALTIME_VERIFICATION_STATUS.PROCESSING;
+            console.log('[RealTimeVerification] Sent audio chunk (ArrayBuffer, bytes:', audioData.byteLength, ')');
+            resolve();
           } else {
             reject(new Error('Invalid audio data type'));
           }
@@ -193,10 +190,11 @@ class RealtimeVerificationService extends EventEmitter {
 
     console.log(`[RealTimeVerification] Received message type: ${type}`, message);
 
-    if (type === 'session_ready') {
+    if (type === 'session_created' || type === 'session_ready') {
+      // Backend sends "session_created"; legacy clients may use "session_ready"
       this.sessionId = message.session_id;
       this.maxChunks = message.max_chunks || 4;
-      this.threshold = message.threshold || 0.75;
+      this.threshold = message.threshold || this.threshold;
       console.log(`[RealTimeVerification] Session ready. Max chunks: ${this.maxChunks}, Threshold: ${this.threshold}`);
       this.emit(REALTIME_VERIFICATION_EVENTS.SESSION_CREATED, {
         sessionId: this.sessionId,

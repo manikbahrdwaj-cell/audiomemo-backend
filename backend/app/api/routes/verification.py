@@ -1,4 +1,6 @@
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, WebSocket, WebSocketDisconnect
+import uuid
+import json
 from app.models.verification import (
     VerificationSessionResponse,
     VerificationChunkAddResponse,
@@ -16,7 +18,7 @@ from app.services.verification import (
 from app.services.verification_streaming import (
     get_verification_streaming_manager
 )
-from app.db.embeddings import get_voice_embedding, check_enrollment
+from app.db.embeddings import get_voice_embedding, check_enrollment, verify_phone_number_embedding
 from app.ml.embedding import generate_embedding, calculate_cosine_similarity
 from app.websocket.manager import ConnectionManager
 from app.websocket.events import event_handler
@@ -24,6 +26,10 @@ from app.websocket.monitor import monitor
 from app.websocket.router import WebSocketMessageRouter, RouteConfig, MessageType
 
 router = APIRouter()
+
+# Module-level shared ConnectionManager (must be singular to share connections)
+_manager = ConnectionManager()
+
 
 @router.post("/verification/session", response_model=VerificationSessionResponse)
 async def create_new_verification_session(
@@ -303,6 +309,70 @@ async def finalize_verification_session(session_id: str, force_single: bool = Fa
         )
 
 
+# ── Backward-compatible root path exposed by the old branch ────────────────
+@router.post("/verify", response_model=VerifyResponse)
+async def verify_voice_compat(
+    phone_number: str = Form(..., description="Phone number to verify against"),
+    file: UploadFile = File(..., description="WAV audio file for verification")
+):
+    """
+    Backward-compatible POST /verify endpoint.
+
+    Replicates the exact behavior of the old `samples-with-paragraph` branch:
+      1. Reads the uploaded WAV bytes as-is (no chunking pre-processing).
+      2. Calls generate_embedding() for a single-pass 192-dim ECAPA embedding.
+      3. Fetches the stored embedding with an indexed phone_number lookup.
+      4. Computes cosine similarity:  (dot(q, s) / (||q||·||s||) + 1) / 2
+      5. Compares against threshold 0.75 for the is_match decision.
+    """
+    if not check_enrollment(phone_number):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Phone number {phone_number} is not registered. Please enroll first."
+        )
+
+    if not file.filename.endswith(('.wav', '.WAV')):
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a WAV file.")
+
+    try:
+        audio_bytes = await file.read()
+        if len(audio_bytes) < 1000:
+            raise HTTPException(status_code=400, detail="Audio file too small. Please record a longer sample.")
+
+        SIMILARITY_THRESHOLD = 0.75
+
+        # Single-pass embedding — identical to old branch generate_embedding()
+        query_embedding = generate_embedding(audio_bytes)
+
+        # Indexed lookup + manual cosine similarity — identical to old branch
+        # verify_phone_number_embedding()
+        result = verify_phone_number_embedding(
+            query_embedding=query_embedding,
+            phone_number=phone_number
+        )
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No embedding found for phone number: {phone_number}"
+            )
+
+        similarity_score = result["similarity_score"]
+        is_match = similarity_score >= SIMILARITY_THRESHOLD
+
+        return VerifyResponse(
+            success=True,
+            phone_number=phone_number,
+            similarity_score=similarity_score,
+            is_match=is_match,
+            threshold=SIMILARITY_THRESHOLD
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process voice verification: {str(e)}")
+
+
 @router.post("/verification/verify", response_model=VerifyResponse)
 async def verify_voice_from_enrollment(
     phone_number: str,
@@ -352,17 +422,25 @@ async def verify_voice_from_enrollment(
                 detail="Audio file too small. Please record a longer sample."
             )
         
-        # Generate embedding and compare against enrolled voice
+        # Generate embedding from the uploaded audio (matches old branch: single-pass, no chunking)
         THRESHOLD = 0.75
         query_embedding = generate_embedding(audio_bytes)
-        enrolled_embedding = get_voice_embedding(phone_number)
-        if enrolled_embedding is None:
+
+        # Retrieve stored embedding and compute similarity using the same formula
+        # as the old branch's verify_phone_number_embedding:
+        #   raw_cos = dot(q, s) / (||q|| * ||s||)   ∈ [-1, 1]
+        #   similarity = (raw_cos + 1) / 2           ∈ [0, 1]
+        result = verify_phone_number_embedding(
+            query_embedding=query_embedding,
+            phone_number=phone_number
+        )
+        if result is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"No enrolled embedding found for {phone_number}"
             )
-        similarity = calculate_cosine_similarity(np.array(enrolled_embedding), query_embedding)
-        
+        similarity = result["similarity_score"]
+
         return VerifyResponse(
             success=True,
             phone_number=phone_number,
@@ -451,112 +529,168 @@ async def cleanup_expired_verification_sessions(max_age_hours: int = 1):
 
 
 @router.websocket("/ws/voice")
-async def websocket_voice_endpoint(websocket: WebSocket, phone_number: str):
+async def websocket_voice_endpoint(websocket: WebSocket):
     """
-    WebSocket endpoint for real-time voice streaming verification
-    
-    - Establishes WebSocket connection for streaming audio
-    - Handles real-time voice verification
-    - Supports multiple simultaneous connections
-    - Uses streaming verification service
-    
-    Args:
-        websocket: WebSocket connection
-        phone_number: Phone number to verify (must be enrolled)
+    WebSocket endpoint for real-time voice streaming (enrollment and verification)
+
+    Message types supported:
+    - 'audio':  Audio chunk (base64 encoded)
+    - 'verify': Start verification process
+    - 'enroll': Start enrollment process
+    - 'ping':   Keep-alive message
+    - 'reset':  Reset audio buffer
+    - 'status': Get connection status
     """
-    from app.websocket.manager import ConnectionManager
-    from app.services.verification_streaming import get_verification_streaming_manager
-    from app.db.embeddings import check_enrollment
-    
-    # Check if phone number is enrolled
-    is_enrolled = check_enrollment(phone_number)
-    if not is_enrolled:
-        await websocket.close(code=1002, reason=f"Phone number {phone_number} is not enrolled")
-        return
-    
-    # Accept connection
-    await websocket.accept()
-    
-    # Add to manager
-    manager = ConnectionManager()
-    manager.add_connection(websocket, phone_number)
-    
+    client_id = str(uuid.uuid4())
+    connection = await _manager.connect(websocket, client_id)
+    monitor.create_connection(client_id)
+
     try:
-        # Initialize streaming verification service
-        streaming_service = get_verification_streaming_manager()
-        
-        # Process messages
         while True:
             try:
                 data = await websocket.receive_text()
-                # Handle incoming messages
-                await streaming_service.handle_message(websocket, data)
             except WebSocketDisconnect:
                 break
-            except Exception as e:
-                # Log error and send error message
-                await websocket.send_text(f"Error: {str(e)}")
+
+            try:
+                message = json.loads(data)
+                message_type = message.get('type')
+                monitor.record_message_received(client_id)
+            except json.JSONDecodeError:
+                await connection.send_json({"type": "error", "message": "Invalid JSON"})
                 continue
-                
-    except Exception as e:
-        # Log error
+
+            response = None
+            try:
+                if message_type == 'audio':
+                    response = await event_handler.handle_audio_chunk(connection, message)
+                    monitor.record_audio_chunk(client_id, len(message.get('data', '')))
+                elif message_type == 'verify':
+                    monitor.record_verification(client_id)
+                    response = await event_handler.handle_verify(connection, message)
+                elif message_type == 'enroll':
+                    monitor.record_enrollment(client_id)
+                    response = await event_handler.handle_enroll(connection, message)
+                elif message_type == 'ping':
+                    response = await event_handler.handle_ping(connection)
+                elif message_type == 'reset':
+                    response = await event_handler.handle_reset(connection)
+                elif message_type == 'status':
+                    response = await event_handler.handle_status(connection)
+                else:
+                    response = {"type": "error", "message": f"Unknown message type: {message_type}"}
+            except Exception as e:
+                response = {"type": "error", "message": f"Error processing message: {str(e)}"}
+                monitor.record_error(client_id, "handler_error")
+
+            if response is not None:
+                await connection.send_json(response)
+                monitor.record_message_sent(client_id)
+
+    except WebSocketDisconnect:
         pass
+    except Exception as e:
+        monitor.record_error(client_id, "connection_error")
     finally:
-        # Remove connection
-        manager.remove_connection(websocket)
+        _manager.disconnect(client_id)
+        monitor.close_connection(client_id)
+        event_handler.cleanup_buffer(client_id)
 
 
 @router.websocket("/ws/verify/{phone_number}")
 async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
     """
-    WebSocket endpoint for real-time voice verification
-    
-    - Establishes WebSocket connection for streaming verification
-    - Handles real-time voice verification
-    - Supports multiple simultaneous connections
-    - Uses streaming verification service
-    
+    WebSocket endpoint for real-time voice verification.
+
+    Clients send raw WAV audio as binary frames. The server accumulates
+    frames into 5-second chunks, scores each against the enrolled embedding,
+    and returns JSON results. Once all max_chunks are evaluated a
+    final_status of "verified" or "unverified" is included in the last result.
+
     Args:
         websocket: WebSocket connection
         phone_number: Phone number to verify (must be enrolled)
     """
-    from app.websocket.manager import ConnectionManager
     from app.services.verification_streaming import get_verification_streaming_manager
     from app.db.embeddings import check_enrollment
-    
-    # Check if phone number is enrolled
+
+    # Reject unenrolled numbers before accepting the socket
     is_enrolled = check_enrollment(phone_number)
     if not is_enrolled:
         await websocket.close(code=1002, reason=f"Phone number {phone_number} is not enrolled")
         return
-    
-    # Accept connection
+
     await websocket.accept()
-    
-    # Add to manager
-    manager = ConnectionManager()
-    manager.add_connection(websocket, phone_number)
-    
+
+    streaming_service = get_verification_streaming_manager()
+    session = await streaming_service.create_session(phone_number)
+
+    if session is None:
+        await websocket.send_json({
+            "type": "error",
+            "message": f"Could not create verification session for {phone_number}"
+        })
+        await websocket.close(code=1011)
+        return
+
+    await websocket.send_json({
+        "type": "session_created",
+        "session_id": session.session_id,
+        "phone_number": phone_number,
+        "max_chunks": session.max_chunks,
+        "target_chunk_duration": session.target_duration_seconds
+    })
+
     try:
-        # Initialize streaming verification service
-        streaming_service = get_verification_streaming_manager()
-        
-        # Process messages
         while True:
             try:
-                data = await websocket.receive_text()
-                # Handle incoming messages
-                await streaming_service.handle_message(websocket, data)
+                message = await websocket.receive()
             except WebSocketDisconnect:
                 break
-            except Exception as e:
-                # Log error and send error message
-                await websocket.send_text(f"Error: {str(e)}")
-                continue
-                
-    except Exception as e:
-        # Log error
+
+            if message["type"] == "websocket.receive":
+                if message.get("bytes"):
+                    # Binary audio frame
+                    result = await streaming_service.process_chunk(
+                        session.session_id, message["bytes"]
+                    )
+
+                    if result is None:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Failed to process audio chunk"
+                        })
+                        continue
+
+                    await websocket.send_json(result)
+
+                    # Close gracefully once final verdict is in
+                    if result.get("final_status") is not None:
+                        break
+
+                elif message.get("text"):
+                    # Text control message e.g. {"type": "cancel"}
+                    try:
+                        ctrl = json.loads(message["text"])
+                        if ctrl.get("type") == "cancel":
+                            await streaming_service.cancel_session(session.session_id)
+                            await websocket.send_json({
+                                "type": "cancelled",
+                                "session_id": session.session_id
+                            })
+                            break
+                    except (json.JSONDecodeError, Exception):
+                        pass
+
+            elif message["type"] == "websocket.disconnect":
+                break
+
+    except WebSocketDisconnect:
         pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
     finally:
-        # Remove connection
-        manager.remove_connection(websocket)
+        streaming_service.cleanup_session(session.session_id)

@@ -32,8 +32,9 @@ def _patched_hf_hub_download(*args, **kwargs):
     # WORKAROUND: If trying to download custom.py, serve it from local directory
     if len(args) > 1 and args[1] == "custom.py":
         # Return local custom.py path instead of downloading
-        backend_dir = Path(__file__).parent
-        local_custom_py = backend_dir.parent / "pretrained_models" / "spkrec-ecapa-voxceleb" / "custom.py"
+        # embedding.py lives at backend/app/ml/ so go 3 levels up to reach backend/
+        backend_dir = Path(__file__).parent.parent.parent
+        local_custom_py = backend_dir / "pretrained_models" / "spkrec-ecapa-voxceleb" / "custom.py"
         if local_custom_py.exists():
             # Return the local path
             return str(local_custom_py)
@@ -191,7 +192,8 @@ def get_model():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Using device: {device}")
         
-        backend_dir = Path(__file__).parent
+        # embedding.py lives at backend/app/ml/ — go 3 levels up to reach backend/
+        backend_dir = Path(__file__).parent.parent.parent
         model_dir = backend_dir / "pretrained_models" / "spkrec-ecapa-voxceleb"
         model_dir.mkdir(parents=True, exist_ok=True)
         
@@ -203,20 +205,25 @@ def get_model():
         # Clean up any problematic files
         _cleanup_model_directory(model_dir)
         
-        # Pre-copy model files from cache to avoid symlink issues
-        try:
-            hf_cache = Path.home() / ".cache" / "huggingface" / "hub" / "models--speechbrain--spkrec-ecapa-voxceleb"
-            snapshots_dir = hf_cache / "snapshots"
-            
-            if snapshots_dir.exists():
-                snapshot_dirs = sorted(snapshots_dir.glob("*"), reverse=True)
-                if snapshot_dirs:
-                    latest_snapshot = snapshot_dirs[0]
-                    logger.info(f"Pre-copying files from cache snapshot: {latest_snapshot}")
-                    _copy_model_files_locally(latest_snapshot, model_dir)
-                    time.sleep(0.5)  # Small delay to ensure file system is ready
-        except Exception as e:
-            logger.warning(f"Could not pre-copy model files: {e}")
+        # Only copy from HuggingFace cache when local model files are missing.
+        # If embedding_model.ckpt already exists, skip to avoid WinError 1314.
+        _key_model_file = model_dir / "embedding_model.ckpt"
+        if not _key_model_file.exists():
+            try:
+                hf_cache = Path.home() / ".cache" / "huggingface" / "hub" / "models--speechbrain--spkrec-ecapa-voxceleb"
+                snapshots_dir = hf_cache / "snapshots"
+                
+                if snapshots_dir.exists():
+                    snapshot_dirs = sorted(snapshots_dir.glob("*"), reverse=True)
+                    if snapshot_dirs:
+                        latest_snapshot = snapshot_dirs[0]
+                        logger.info(f"Pre-copying files from cache snapshot: {latest_snapshot}")
+                        _copy_model_files_locally(latest_snapshot, model_dir)
+                        time.sleep(0.5)  # Small delay to ensure file system is ready
+            except Exception as e:
+                logger.warning(f"Could not pre-copy model files: {e}")
+        else:
+            logger.info(f"Local model files already present at {model_dir}, skipping cache copy")
         
         # Load the model
         try:

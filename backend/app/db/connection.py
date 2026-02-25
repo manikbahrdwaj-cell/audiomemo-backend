@@ -101,3 +101,10 @@ def get_enrollment_history_collection():
         logging.info("Enrollment history collection initialized")
     
     return _enrollment_history_collection
+
+def get_db_instance():
+    """Return the raw PyMongo Database object (initializes connection if needed)."""
+    global _db
+    if _db is None:
+        get_database()  # Initialize connection and set _db
+    return _db

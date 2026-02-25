@@ -1,30 +1,29 @@
 import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from app.db.connection import get_database, _client, DATABASE_NAME  # used to access _db for collection init
+from app.db.connection import get_db_instance
 
-_db = None
+_verified_sessions_collection = None
+
 
 def get_verified_sessions_collection():
     """Get verified sessions collection for voice-first verification"""
-    global _db
-    
-    if _db is None:
-        get_database()  # Initialize connection
-        _db = _client[DATABASE_NAME]
-    
-    verified_sessions_collection = _db["verified_sessions"]
-    
-    # Create indexes
-    verified_sessions_collection.create_index("session_id", unique=True)
-    verified_sessions_collection.create_index("phone_number")
-    verified_sessions_collection.create_index("session_status")
-    verified_sessions_collection.create_index("created_at")
-    verified_sessions_collection.create_index("verified_at")
-    
-    logging.info("Verified sessions collection initialized")
-    
-    return verified_sessions_collection
+    global _verified_sessions_collection
+
+    if _verified_sessions_collection is None:
+        db = get_db_instance()
+        _verified_sessions_collection = db["verified_sessions"]
+
+        # Create indexes
+        _verified_sessions_collection.create_index("session_id", unique=True)
+        _verified_sessions_collection.create_index("phone_number")
+        _verified_sessions_collection.create_index("session_status")
+        _verified_sessions_collection.create_index("created_at")
+        _verified_sessions_collection.create_index("verified_at")
+
+        logging.info("Verified sessions collection initialized")
+
+    return _verified_sessions_collection
 
 
 def save_verified_session(session_data: Dict[str, Any]) -> str:

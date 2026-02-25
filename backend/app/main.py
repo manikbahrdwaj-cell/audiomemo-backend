@@ -20,8 +20,8 @@ app.add_middleware(
     allow_headers=['*']
 )
 
-app.include_router(enrollment.router, prefix='/enrollment', tags=['enrollment'])
-app.include_router(verification.router, prefix='/verification', tags=['verification'])
+app.include_router(enrollment.router, tags=['enrollment'])
+app.include_router(verification.router, tags=['verification'])
 app.include_router(health.router, tags=['health'])
 
 if __name__ == "__main__":
