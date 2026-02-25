@@ -4,7 +4,6 @@ from app.models.verification import (
     VerificationChunkAddResponse,
     VerificationFinalizeResponse,
     VerificationResult,
-    VerificationStatus,
     VerificationSessionConfig
 )
 from app.services.verification import (

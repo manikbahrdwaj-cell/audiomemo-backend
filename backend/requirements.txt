@@ -1,20 +1,21 @@
+
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 websockets==12.0
 python-multipart==0.0.6
 pymongo==4.6.0
-numpy==1.24.3
+numpy==1.26.4
 torch==2.2.0
 torchaudio==2.2.0
 speechbrain==0.5.16
 scipy==1.11.4
-pydantic==2.5.2
+pydantic>=2.7.4,<3.0.0
 python-dotenv==1.0.0
 
-# LangChain & LLM Integration (Python 3.14 compatible)
-langchain>=0.2.0
-langchain-core>=0.2.0
-langchain-openai>=0.2.0
-langchain-google-genai>=1.1.0
-langgraph>=0.2.0
-langchain-community>=0.2.0
+# LangChain & LLM Integration
+langchain==0.3.20
+langchain-core==0.3.43
+langchain-openai==0.3.7
+langchain-google-genai==2.0.10
+langgraph==0.2.73
+langchain-community==0.3.19
