@@ -25,6 +25,10 @@ export function useRealtimeVerification() {
   const [error, setError] = useState(null);
   const [similarityScore, setSimilarityScore] = useState(0);
 
+  // Agent-mode state (populated after biometric verification succeeds)
+  const [agentMessages, setAgentMessages] = useState([]);
+  const [isAgentThinking, setIsAgentThinking] = useState(false);
+
   // Initialize service on mount
   useEffect(() => {
     serviceRef.current = new RealtimeVerificationService();
@@ -74,6 +78,9 @@ export function useRealtimeVerification() {
         setStatus(REALTIME_VERIFICATION_STATUS.VERIFIED);
         setIsVerified(true);
         setChunkResults(data.results || []);
+        // Reset agent state for this session
+        setAgentMessages([]);
+        setIsAgentThinking(false);
       });
 
       service.on(REALTIME_VERIFICATION_EVENTS.UNVERIFIED, (data) => {
@@ -81,6 +88,22 @@ export function useRealtimeVerification() {
         setStatus(REALTIME_VERIFICATION_STATUS.UNVERIFIED);
         setIsVerified(false);
         setChunkResults(data.results || []);
+      });
+
+      service.on(REALTIME_VERIFICATION_EVENTS.AGENT_RESPONSE, (data) => {
+        setIsAgentThinking(false);
+        const now = new Date();
+        setAgentMessages((prev) => [
+          ...prev,
+          // User bubble — Whisper transcription of what was spoken
+          ...(data.transcript ? [{ role: 'user', text: data.transcript, timestamp: now }] : []),
+          // Assistant bubble — agent spoken response
+          { role: 'assistant', text: data.text, audioBase64: data.audioBase64, timestamp: now },
+        ]);
+      });
+
+      service.on(REALTIME_VERIFICATION_EVENTS.AGENT_THINKING, () => {
+        setIsAgentThinking(true);
       });
 
       service.on(REALTIME_VERIFICATION_EVENTS.ERROR, (data) => {
@@ -135,6 +158,16 @@ export function useRealtimeVerification() {
   }, []);
 
   /**
+   * Add a user message to agent history (called by component before sending audio)
+   */
+  const addUserAgentMessage = useCallback((text) => {
+    setAgentMessages((prev) => [
+      ...prev,
+      { role: 'user', text, timestamp: new Date() },
+    ]);
+  }, []);
+
+  /**
    * Check if verification is complete
    */
   const isComplete = isVerified !== null;
@@ -161,6 +194,8 @@ export function useRealtimeVerification() {
     setIsVerified(null);
     setChunkResults([]);
     setError(null);
+    setAgentMessages([]);
+    setIsAgentThinking(false);
   }, []);
 
   /**
@@ -189,6 +224,11 @@ export function useRealtimeVerification() {
     connectForVerification,
     submitAudioChunk,
     disconnect,
+    addUserAgentMessage,
+
+    // Agent state
+    agentMessages,
+    isAgentThinking,
 
     // Utilities
     shouldStopRecording,

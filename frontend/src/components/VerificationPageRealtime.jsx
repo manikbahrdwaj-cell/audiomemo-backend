@@ -33,11 +33,13 @@ function VerificationPageRealtime() {
   const [recordingTime, setRecordingTime] = useState(0);
   const [threshold, setThreshold] = useState(0.75);
   const [isConnecting, setIsConnecting] = useState(false);
-  
+  const [isAgentMode, setIsAgentMode] = useState(false);
+
   // References
   const timerRef = useRef(null);
   const chunkingServiceRef = useRef(null);
   const pendingStartRecordingRef = useRef(false);
+  const agentAudioRef = useRef(null);
   
   // Real-time verification hook
   const verification = useRealtimeVerification();
@@ -66,11 +68,40 @@ function VerificationPageRealtime() {
 
   // Stop recording when verification complete
   useEffect(() => {
-    if (verification.isComplete && isRecording && chunkingServiceRef.current) {
-      console.log('[VerificationPageRealtime] Stopping recording - verification complete');
+    if (!verification.isComplete || !isRecording || !chunkingServiceRef.current) return;
+
+    if (verification.isVerified) {
+      // Biometric passed — stop the chunking service but KEEP the WebSocket open.
+      // The backend routes all subsequent audio to the voice agent.
+      console.log('[VerificationPageRealtime] Biometric verified — switching to agent mode');
+      chunkingServiceRef.current.stopRecording();
+      setIsRecording(false);
+      setRecordingTime(0);
+      setIsAgentMode(true);
+      if (timerRef.current) clearInterval(timerRef.current);
+      // Restart microphone recording for the voice agent after a short pause.
+      setTimeout(() => handleStartRecordingCore(), 800);
+    } else {
+      // Unverified — stop everything and close the WebSocket.
+      console.log('[VerificationPageRealtime] Stopping recording - verification failed');
       handleStopRecording();
     }
   }, [verification.isComplete]);
+
+  // Auto-play agent audio when a new assistant message arrives
+  useEffect(() => {
+    const messages = verification.agentMessages;
+    if (messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (last.role === 'assistant' && last.audioBase64) {
+      if (agentAudioRef.current) {
+        agentAudioRef.current.pause();
+      }
+      const audio = new Audio(`data:audio/mp3;base64,${last.audioBase64}`);
+      agentAudioRef.current = audio;
+      audio.play().catch((e) => console.warn('[Agent] Auto-play blocked:', e));
+    }
+  }, [verification.agentMessages.length]);
 
   // Auto-start recording once WebSocket session is ready
   useEffect(() => {
@@ -194,9 +225,13 @@ function VerificationPageRealtime() {
     }
     setIsRecording(false);
     setRecordingTime(0);
+    setIsAgentMode(false);
     if (timerRef.current) clearInterval(timerRef.current);
-    // Always disconnect the WebSocket when the user ends the call so the
-    // component returns to the idle form instead of showing "Awaiting microphone…"
+    if (agentAudioRef.current) {
+      agentAudioRef.current.pause();
+      agentAudioRef.current = null;
+    }
+    // Disconnect the WebSocket and return to the idle form.
     verification.disconnect();
   };
 
@@ -339,7 +374,8 @@ function VerificationPageRealtime() {
         <div className="mb-6 p-4 bg-green-50 rounded-lg border border-green-200">
           <h2 className="text-lg font-semibold mb-4 text-gray-800">Recording & Verification</h2>
 
-          {/* Status Bar */}
+          {/* Status Bar — hidden in agent mode */}
+          {!isAgentMode && (
           <div className="mb-6 p-4 bg-white rounded-lg border border-green-200">
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm font-medium text-gray-700">Status</span>
@@ -375,6 +411,7 @@ function VerificationPageRealtime() {
               </div>
             )}
           </div>
+          )}
 
           {/* Recording Controls */}
           <div className="mb-6">
@@ -405,8 +442,8 @@ function VerificationPageRealtime() {
 
           </div>
 
-          {/* Chunk Results List with Live Chart */}
-          {verification.chunkResults.length > 0 && (
+          {/* Chunk Results List with Live Chart — hidden in agent mode */}
+          {!isAgentMode && verification.chunkResults.length > 0 && (
             <div className="mb-6">
               <h3 className="font-medium text-gray-700 mb-3">Chunk Results</h3>
               
@@ -483,11 +520,82 @@ function VerificationPageRealtime() {
               <p className="text-sm text-red-700">❌ {verification.error}</p>
             </div>
           )}
+
+          {/* ------------------------------------------------------------------ */}
+          {/* Agent Mode Panel — shown after biometric verification succeeds       */}
+          {/* ------------------------------------------------------------------ */}
+          {isAgentMode && (
+            <div className="mt-4 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
+              <h3 className="text-lg font-semibold text-indigo-800 mb-3">
+                🤖 Voice Agent
+              </h3>
+
+              {/* Thinking indicator */}
+              {verification.isAgentThinking && (
+                <div className="flex items-center gap-2 mb-3 text-indigo-600 text-sm">
+                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                  </svg>
+                  Thinking…
+                </div>
+              )}
+
+              {/* Empty state */}
+              {verification.agentMessages.length === 0 && !verification.isAgentThinking && (
+                <p className="text-sm text-indigo-600 italic">
+                  🎤 Speak your question…
+                </p>
+              )}
+
+              {/* Conversation history */}
+              {verification.agentMessages.length > 0 && (
+                <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                  {verification.agentMessages.map((msg, i) => (
+                    <div
+                      key={i}
+                      className={`flex ${
+                        msg.role === 'user' ? 'justify-end' : 'justify-start'
+                      }`}
+                    >
+                      <div
+                        className={`max-w-xs rounded-2xl px-4 py-2 text-sm ${
+                          msg.role === 'user'
+                            ? 'bg-indigo-600 text-white rounded-br-sm'
+                            : 'bg-white border border-indigo-200 text-gray-800 rounded-bl-sm'
+                        }`}
+                      >
+                        {msg.role === 'user' ? (
+                          <span>{msg.text}</span>
+                        ) : (
+                          <>
+                            <p>{msg.text}</p>
+
+                            {msg.audioBase64 && (
+                              <button
+                                onClick={() => {
+                                  const a = new Audio(`data:audio/mp3;base64,${msg.audioBase64}`);
+                                  a.play().catch(() => {});
+                                }}
+                                className="mt-1 text-xs text-indigo-500 underline"
+                              >
+                                ▶ Replay
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Verification Complete Section */}
-      {verification.isComplete && (
+      {/* Verification Complete Section — only shown when NOT verified (failure path) */}
+      {verification.isComplete && !verification.isVerified && (
         <div className={`mb-6 p-6 rounded-lg border ${
           verification.isVerified
             ? 'bg-green-50 border-green-200'

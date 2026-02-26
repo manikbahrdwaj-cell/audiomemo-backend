@@ -12,6 +12,8 @@ export const REALTIME_VERIFICATION_EVENTS = {
   UNVERIFIED: 'realtimeVerification:unverified',
   ERROR: 'realtimeVerification:error',
   CONNECTION_CLOSED: 'realtimeVerification:connection_closed',
+  AGENT_RESPONSE: 'realtimeVerification:agent_response',
+  AGENT_THINKING: 'realtimeVerification:agent_thinking',
 };
 
 export const REALTIME_VERIFICATION_STATUS = {
@@ -262,6 +264,7 @@ class RealtimeVerificationService extends EventEmitter {
             verifiedAtChunk: message.verified_at_chunk,
             results: [...this.chunkResults],
           });
+          // Do NOT set COMPLETED — keep the WebSocket alive for agent mode.
         } else if (message.final_status === 'unverified') {
           console.log(`[RealTimeVerification] UNVERIFIED after ${result.chunkNumber} chunks`);
           this.status = REALTIME_VERIFICATION_STATUS.UNVERIFIED;
@@ -270,9 +273,8 @@ class RealtimeVerificationService extends EventEmitter {
           this.emit(REALTIME_VERIFICATION_EVENTS.UNVERIFIED, {
             results: [...this.chunkResults],
           });
+          this.status = REALTIME_VERIFICATION_STATUS.COMPLETED;
         }
-
-        this.status = REALTIME_VERIFICATION_STATUS.COMPLETED;
       } else {
         // Emit chunk result for live update
         this.emit(REALTIME_VERIFICATION_EVENTS.CHUNK_RESULT, result);
@@ -290,6 +292,16 @@ class RealtimeVerificationService extends EventEmitter {
         error: message.error,
         message: message.message,
       });
+    } else if (type === 'agent_audio') {
+      this.emit(REALTIME_VERIFICATION_EVENTS.AGENT_RESPONSE, {
+        audioBase64: message.data || '',
+        transcript: message.transcript || '',
+        text: message.text || '',
+      });
+    } else if (type === 'agent_thinking' || type === 'agent_listening') {
+      this.emit(REALTIME_VERIFICATION_EVENTS.AGENT_THINKING, {});
+    } else if (type === 'audio_ack') {
+      // Synchronous ACK from server — ignore silently.
     } else if (type === 'cancelled') {
       console.log('[RealTimeVerification] Verification cancelled');
       this.status = REALTIME_VERIFICATION_STATUS.COMPLETED;

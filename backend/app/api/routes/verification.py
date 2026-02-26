@@ -1,3 +1,4 @@
+import base64
 import logging
 
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, WebSocket, WebSocketDisconnect
@@ -776,6 +777,8 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
         "threshold": session.threshold,
     })
 
+    in_agent_mode = False  # flips to True after successful biometric verification
+
     try:
         while True:
             try:
@@ -789,6 +792,46 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
                 break
 
             if message["type"] == "websocket.receive":
+                # ------------------------------------------------------------------
+                # Agent mode: biometric phase is done; route all audio to the
+                # VoiceAgentOrchestrator.  Accepts both raw binary frames and
+                # JSON {type:"audio", data:"<base64>"} text frames.
+                # ------------------------------------------------------------------
+                if in_agent_mode:
+                    from app.services.voice_agent import get_voice_agent
+
+                    if message.get("bytes"):
+                        audio_bytes = message["bytes"]
+                    elif message.get("text"):
+                        try:
+                            ctrl = json.loads(message["text"])
+                            if ctrl.get("type") == "audio":
+                                audio_bytes = base64.b64decode(ctrl.get("data", ""))
+                            elif ctrl.get("type") == "cancel":
+                                logger.info(
+                                    "Agent session cancelled by client | phone=%s session_id=%s",
+                                    phone_number,
+                                    session.session_id,
+                                )
+                                break
+                            else:
+                                continue
+                        except (json.JSONDecodeError, Exception):
+                            continue
+                    else:
+                        continue
+
+                    await get_voice_agent().process_audio_chunk(
+                        client_id=session.session_id,
+                        audio_bytes=audio_bytes,
+                        sample_rate=16000,
+                        send_ws=websocket.send_json,
+                    )
+                    continue
+
+                # ------------------------------------------------------------------
+                # Biometric verification phase
+                # ------------------------------------------------------------------
                 if message.get("bytes"):
                     chunk_size = len(message["bytes"])
                     logger.debug(
@@ -821,7 +864,7 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
                     )
                     await websocket.send_json(result)
 
-                    # Close gracefully once final verdict is in
+                    # Transition on final verdict
                     if result.get("final_status") is not None:
                         logger.info(
                             "Streaming verification complete | phone=%s session_id=%s final_status=%s",
@@ -829,7 +872,19 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
                             session.session_id,
                             result["final_status"],
                         )
-                        break
+                        if result["final_status"] == "verified":
+                            # Stay connected — switch to voice-agent mode.
+                            # The AgentSessionCache was already populated by
+                            # _save_session_to_database(); just flip the flag.
+                            logger.info(
+                                "Switching to agent mode | phone=%s session_id=%s",
+                                phone_number,
+                                session.session_id,
+                            )
+                            in_agent_mode = True
+                        else:
+                            # Unverified — close the connection gracefully.
+                            break
 
                 elif message.get("text"):
                     try:
@@ -872,6 +927,12 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
             pass
     finally:
         streaming_service.cleanup_session(session.session_id)
+        # Remove any agent session cache entry so it doesn't linger
+        try:
+            from app.agent.session_cache import delete as _agent_delete
+            _agent_delete(session.session_id)
+        except Exception:
+            pass
         logger.info(
             "WebSocket /ws/verify/%s cleaned up | session_id=%s",
             phone_number,

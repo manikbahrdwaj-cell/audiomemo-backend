@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from langgraph.graph import END, StateGraph
-from langgraph.graph.graph import CompiledGraph
+from langgraph.graph.state import CompiledStateGraph as CompiledGraph
 
 from app.agent.llm import build_llm
 from app.agent.nodes.query_compiler import build_query_compiler_node
