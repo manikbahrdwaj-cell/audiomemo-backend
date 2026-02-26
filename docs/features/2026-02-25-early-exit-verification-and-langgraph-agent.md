@@ -128,6 +128,7 @@ The frontend continues sending the same `{type: "audio", data: "<base64-wav>"}` 
 | `backend/app/agent/nodes/response_shaper.py` | LLM node — result → spoken sentence |
 | `backend/app/agent/graph.py` | Compiles the LangGraph state machine |
 | `backend/app/services/voice_agent.py` | Orchestrator: VAD → STT → graph → TTS, manages conversation_history |
+| `backend/scripts/seed_transactions.py` | Creates the `transactions` table and seeds it with realistic dummy data keyed to enrolled phone numbers |
 
 ---
 
@@ -196,6 +197,7 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
 6. Connect unverified, send audio. Assert `agent_audio` contains PROMPT_NOT_VERIFIED TTS.
 7. With verified session, mock LangGraph to fail the security check 3 times. Assert `agent_audio` contains an apology TTS.
 8. Set `LLM_PROVIDER=gemini`, repeat scenario 2 with mocked Gemini response.
+9. Run `seed_transactions.py` against a test database. Assert `transactions` table exists, has the correct schema, and contains at least 3 rows per seeded phone number. Assert that running the script twice does not produce duplicate rows (idempotent via `INSERT … ON CONFLICT DO NOTHING`).
 
 ---
 
@@ -593,5 +595,30 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
     "No REST endpoint created or modified"
   ],
   "estimated_lines_changed": 20
+}
+```
+
+```json
+{
+  "id": "T19",
+  "title": "Create transactions table and seed dummy data",
+  "type": "feature",
+  "priority": "high",
+  "layer": "data",
+  "file": "backend/scripts/seed_transactions.py",
+  "function_or_class": null,
+  "description": "Create backend/scripts/seed_transactions.py. The script connects to the PostgreSQL database at settings.DATABASE_URL (fall back to the DATABASE_URL env var if settings is unavailable). Steps: (1) CREATE TABLE IF NOT EXISTS transactions (id SERIAL PRIMARY KEY, phone_number VARCHAR(20) NOT NULL, amount NUMERIC(10,2) NOT NULL, merchant VARCHAR(100) NOT NULL, category VARCHAR(50) NOT NULL, timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()); CREATE INDEX IF NOT EXISTS idx_transactions_phone ON transactions(phone_number). (2) Define SEED_DATA as a list of dicts — include at least 3 distinct enrolled phone numbers (use realistic E.164 format, e.g. '+14155551001', '+14155551002', '+14155551003') with 5–8 transactions each. Cover a variety of merchants (grocery, coffee, fuel, online retail, restaurant), categories, amounts ranging from $3.50 to $450.00, and timestamps spread across the last 90 days. (3) Insert all rows using executemany with INSERT INTO transactions (phone_number, amount, merchant, category, timestamp) VALUES (%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING to make the script idempotent. (4) Print a summary of rows inserted per phone number. Run via: python -m scripts.seed_transactions from the backend/ directory.",
+  "depends_on": ["T01"],
+  "context_files": [
+    "backend/app/core/config.py"
+  ],
+  "acceptance_criteria": [
+    "Running the script creates the transactions table with the correct schema and indexes",
+    "Running the script twice produces no duplicate rows (idempotent)",
+    "At least 3 distinct phone numbers are seeded, each with ≥5 transactions",
+    "Transactions cover varied merchants, categories, amounts, and timestamps spanning 90 days",
+    "Script prints a per-phone-number row-count summary on success"
+  ],
+  "estimated_lines_changed": 80
 }
 ```
