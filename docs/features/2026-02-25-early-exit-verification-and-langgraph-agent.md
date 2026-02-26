@@ -1,40 +1,40 @@
-# Feature: Early-Exit Verification + WebSocket-Native Voice Agent
+# Feature: WebSocket-Native Voice Agent with Conversation History
 
-**Date:** 2026-02-25  
+**Date:** 2026-02-25
 **Branch:** manik/refactoring
 
 ---
 
 ## Feature Summary
 
-Two independent features delivered together:
+**WebSocket-Native Voice Agent** — After a session is verified, the same WebSocket connection transparently switches into "agent mode". The backend autonomously detects this switch via an in-memory session cache — the frontend has no role in triggering the agent. Subsequent audio chunks are fed to:
 
-1. **Early-Exit Verification** — When any single chunk's similarity score clears the enrollment threshold the session is immediately marked `verified`. No further audio is needed. This reduces latency for legitimate users while keeping the full multi-chunk flow as a fallback.
+- **VAD** (energy-based Voice Activity Detection) to detect utterance completion (1.5 s of silence after speech)
+- **Whisper STT** to transcribe the completed utterance
+- A **meaningfulness classifier** to reject noise or filler speech and prompt the user to try again
+- **LangGraph** to compile the utterance to a safe, phone-filtered SQL query and retrieve the result — receiving the full conversation history so it can maintain multi-turn context
+- **OpenAI TTS** to synthesise the answer, which is sent back over the same WebSocket as audio bytes
 
-2. **WebSocket-Native Voice Agent** — After a session is verified, the same WebSocket connection transparently switches into "agent mode". The backend autonomously detects this switch via an in-memory session cache — the frontend has no role in triggering the agent. Subsequent audio chunks are fed to:
-   - **VAD** (energy-based Voice Activity Detection) to detect utterance completion (1.5 s of silence after speech)
-   - **Whisper STT** to transcribe the completed utterance
-   - A **meaningfulness classifier** to reject noise or filler speech and prompt the user to try again
-   - **LangGraph** to compile the utterance to a safe, phone-filtered SQL query and retrieve the result
-   - **OpenAI TTS** to synthesise the answer, which is sent back over the same WebSocket as audio bytes
+If the user is not yet verified when audio arrives in agent mode, a TTS prompt ("Please speak a little more so I can verify you.") is returned instead.
 
-   If the user is not yet verified when audio arrives in agent mode, a TTS prompt ("Please speak a little more so I can verify you.") is returned instead.
+Conversation history (text-only) is persisted in the in-memory session cache for the duration of the WebSocket session. Each completed user utterance and each agent response are appended so that subsequent LangGraph invocations receive full prior context.
 
 ---
 
 ## Architecture
 
-### Phase 1 — Biometric Verification (existing, with early-exit addition)
+### Phase 1 — Biometric Verification (existing, unchanged)
 
 ```
 audio chunks → RealtimeVerificationManager.process_chunk()
                         │
-              similarity >= threshold?
-                │ YES (early-exit)               │ NO (continue)
-                ▼                                ▼
-     final_status = "verified"          accumulate up to max_chunks
-     write to AgentSessionCache         all chunks match? → verified / unverified
-     send TTS greeting over WS
+              accumulate up to max_chunks
+                        │
+              all chunks evaluated → verified / unverified
+                        │ verified
+                        ▼
+             write to AgentSessionCache
+             send TTS greeting over WS
 ```
 
 ### Phase 2 — Voice Agent (same WebSocket, same `audio` message type)
@@ -64,13 +64,18 @@ audio chunks → RealtimeVerificationManager.process_chunk()
                         │  TTS "I didn't catch that. Ask again." → WS          │
                         │       │ meaningful                                   │
                         │       ▼                                              │
-                        │  LangGraph(user_phone, utterance)                    │
+                        │  append utterance to session conversation_history    │
+                        │       │                                              │
+                        │  LangGraph(user_phone, utterance,                    │
+                        │            conversation_history)                     │
                         │     query_compiler → security_supervisor             │
                         │       └─(fail/retry ≤3)──► query_compiler           │
                         │         └─(pass)──► tool_executor(MCP)              │
                         │                       └──► response_shaper(LLM)     │
                         │       │ spoken_text                                  │
                         │       ▼                                              │
+                        │  append spoken_text to session conversation_history  │
+                        │       │                                              │
                         │  OpenAI TTS → mp3 bytes → send_agent_audio() → WS   │
                         └──────────────────────────────────────────────────────┘
 ```
@@ -82,12 +87,14 @@ audio chunks → RealtimeVerificationManager.process_chunk()
   "<client_id>": {
     "verified": bool,
     "phone_number": str,           # populated on verification success
-    "agent_audio_buffer": bytes,   # accumulates raw audio for current utterance
-    "speech_detected": bool,       # VAD: have we heard speech this utterance?
-    "last_speech_ts": float,       # time.monotonic() of last speech frame
+    "vad": UtteranceDetector,      # per-client VAD instance (owns buffer + flags)
+    "conversation_history": list,  # text-only turn history for this session
+    # Each entry: {"role": "user" | "assistant", "text": str}
   }
 }
 ```
+
+`conversation_history` starts as an empty list when the session is first created and grows with each completed turn. It is passed verbatim to every LangGraph invocation so the query_compiler node can reference prior questions and the response_shaper can give contextually coherent answers. History is never persisted to the database — it lives only for the duration of the WebSocket connection.
 
 The cache is process-local (dict singleton). It is written by `verification_streaming.py` on verification success and read by `VoiceAgentOrchestrator` on every subsequent audio chunk. No DB round-trip per chunk.
 
@@ -108,19 +115,19 @@ The frontend continues sending the same `{type: "audio", data: "<base64-wav>"}` 
 | File | Purpose |
 |---|---|
 | `backend/app/agent/__init__.py` | Package marker |
-| `backend/app/agent/session_cache.py` | In-memory session state singleton |
+| `backend/app/agent/session_cache.py` | In-memory session state singleton (includes conversation_history) |
 | `backend/app/agent/vad.py` | Energy-based VAD and utterance completion detector |
 | `backend/app/agent/stt.py` | Whisper STT via OpenAI API |
 | `backend/app/agent/tts.py` | OpenAI TTS — text → mp3 bytes |
-| `backend/app/agent/state.py` | `AgentState` TypedDict for LangGraph |
+| `backend/app/agent/state.py` | `AgentState` TypedDict for LangGraph (includes conversation_history) |
 | `backend/app/agent/llm.py` | `build_llm()` factory — OpenAI or Gemini |
 | `backend/app/agent/nodes/__init__.py` | Package marker |
-| `backend/app/agent/nodes/query_compiler.py` | LLM node — NL → SQL |
+| `backend/app/agent/nodes/query_compiler.py` | LLM node — NL → SQL, uses conversation_history for context |
 | `backend/app/agent/nodes/security_supervisor.py` | Python node — SQL safety |
 | `backend/app/agent/nodes/tool_executor.py` | MCP node — SQL execution |
 | `backend/app/agent/nodes/response_shaper.py` | LLM node — result → spoken sentence |
 | `backend/app/agent/graph.py` | Compiles the LangGraph state machine |
-| `backend/app/services/voice_agent.py` | Orchestrator: VAD → STT → graph → TTS |
+| `backend/app/services/voice_agent.py` | Orchestrator: VAD → STT → graph → TTS, manages conversation_history |
 
 ---
 
@@ -128,8 +135,8 @@ The frontend continues sending the same `{type: "audio", data: "<base64-wav>"}` 
 
 | File | Why |
 |---|---|
-| `backend/app/core/config.py` | `EARLY_EXIT_ON_MATCH`, `OPENAI_API_KEY`, `LLM_PROVIDER`, `GOOGLE_PROJECT_ID`, `DATABASE_URL`, `VAD_SILENCE_THRESHOLD_RMS`, `VAD_SILENCE_DURATION_MS` |
-| `backend/app/services/verification_streaming.py` | Early-exit field + branch; write to `AgentSessionCache` on verification success (T02, T03, T17) |
+| `backend/app/core/config.py` | `OPENAI_API_KEY`, `LLM_PROVIDER`, `GOOGLE_PROJECT_ID`, `DATABASE_URL`, `VAD_SILENCE_THRESHOLD_RMS`, `VAD_SILENCE_DURATION_MS` |
+| `backend/app/services/verification_streaming.py` | Write to `AgentSessionCache` on verification success (T17) |
 | `backend/app/websocket/events.py` | Route audio to `VoiceAgentOrchestrator` when session is in cache (T18) |
 | `backend/requirements.txt` | `langgraph`, `langchain-openai`, `langchain-google-vertexai`, `mcp`, `openai>=1.30` |
 
@@ -168,7 +175,6 @@ openai>=1.30          # Whisper STT + TTS
 
 New `.env` keys:
 ```
-EARLY_EXIT_ON_MATCH=true
 OPENAI_API_KEY=sk-...
 LLM_PROVIDER=openai              # or "gemini"
 GOOGLE_PROJECT_ID=my-gcp-project # only when LLM_PROVIDER=gemini
@@ -181,18 +187,15 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
 
 ## Test Plan
 
-### Feature 1 — Early-Exit Verification
-1. Enroll a phone. Send one matching chunk. Assert `final_status == "verified"` and `verified_at_chunk == 1`.
-2. After early exit, send a second chunk. Assert already-complete status returned without re-processing.
-3. Set `EARLY_EXIT_ON_MATCH=false`. Repeat — assert session continues accumulating all chunks.
-
-### Feature 2 — Voice Agent
-1. Connect via WebSocket, verify a phone number. Assert `AgentSessionCache.get(client_id)["verified"] == True`.
+### Voice Agent
+1. Connect via WebSocket, verify a phone number. Assert `AgentSessionCache.get(client_id)["verified"] == True` and `conversation_history == []`.
 2. Send audio chunks of a complete spoken query, then 1.5 s silence. Assert an `agent_audio` WS frame is returned.
-3. Send noise-only audio. Assert `agent_audio` frame contains the PROMPT_ASK_AGAIN TTS.
-4. Connect unverified, send audio. Assert `agent_audio` contains PROMPT_NOT_VERIFIED TTS.
-5. With verified session, mock LangGraph to fail the security check 3 times. Assert `agent_audio` contains an apology TTS.
-6. Set `LLM_PROVIDER=gemini`, repeat scenario 2 with mocked Gemini response.
+3. After step 2, assert `conversation_history` has two entries: `{"role": "user", "text": <transcription>}` and `{"role": "assistant", "text": <spoken>}`.
+4. Send a follow-up query that references the previous answer. Assert the LangGraph query_compiler receives the full history and generates a contextually correct SQL.
+5. Send noise-only audio. Assert `agent_audio` frame contains the PROMPT_ASK_AGAIN TTS. Assert `conversation_history` is NOT appended (non-meaningful input is not stored).
+6. Connect unverified, send audio. Assert `agent_audio` contains PROMPT_NOT_VERIFIED TTS.
+7. With verified session, mock LangGraph to fail the security check 3 times. Assert `agent_audio` contains an apology TTS.
+8. Set `LLM_PROVIDER=gemini`, repeat scenario 2 with mocked Gemini response.
 
 ---
 
@@ -207,65 +210,17 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "layer": "config",
   "file": "backend/app/core/config.py",
   "function_or_class": "Settings",
-  "description": "Add seven new fields to the Settings Pydantic model: (1) EARLY_EXIT_ON_MATCH: bool = True; (2) OPENAI_API_KEY: str = ''; (3) LLM_PROVIDER: str = 'openai' ('openai' or 'gemini'); (4) GOOGLE_PROJECT_ID: str = '' (only needed for Gemini); (5) DATABASE_URL: str = '' (PostgreSQL URL for MCP tool); (6) VAD_SILENCE_THRESHOLD_RMS: float = 0.01 (RMS amplitude below which audio is considered silence); (7) VAD_SILENCE_DURATION_MS: int = 1500 (consecutive silence milliseconds that trigger utterance completion). All fields must have safe defaults so existing tests pass with no .env file present.",
+  "description": "Add six new fields to the Settings Pydantic model: (1) OPENAI_API_KEY: str = ''; (2) LLM_PROVIDER: str = 'openai' ('openai' or 'gemini'); (3) GOOGLE_PROJECT_ID: str = '' (only needed for Gemini); (4) DATABASE_URL: str = '' (PostgreSQL URL for MCP tool); (5) VAD_SILENCE_THRESHOLD_RMS: float = 0.01 (RMS amplitude below which audio is considered silence); (6) VAD_SILENCE_DURATION_MS: int = 1500 (consecutive silence milliseconds that trigger utterance completion). All fields must have safe defaults so existing tests pass with no .env file present.",
   "depends_on": [],
   "context_files": [
     "backend/app/core/config.py"
   ],
   "acceptance_criteria": [
     "Settings() instantiates without a .env file",
-    "All 7 new fields are accessible via settings.<FIELD>",
+    "All 6 new fields are accessible via settings.<FIELD>",
     "No existing field is removed or renamed"
   ],
-  "estimated_lines_changed": 10
-}
-```
-
-```json
-{
-  "id": "T02",
-  "title": "Add early_exit_on_match field to session dataclass",
-  "type": "feature",
-  "priority": "high",
-  "layer": "service",
-  "file": "backend/app/services/verification_streaming.py",
-  "function_or_class": "StreamingVerificationSession",
-  "description": "Add early_exit_on_match: bool = True to the StreamingVerificationSession dataclass. Update RealtimeVerificationManager.create_session() to accept an optional early_exit_on_match: bool parameter that defaults to settings.EARLY_EXIT_ON_MATCH (import settings from app.core.config at the top of the file). Assign the parameter to session.early_exit_on_match on the newly created session object. All existing callers pass no argument so the default must be backward-compatible.",
-  "depends_on": ["T01"],
-  "context_files": [
-    "backend/app/services/verification_streaming.py",
-    "backend/app/core/config.py"
-  ],
-  "acceptance_criteria": [
-    "StreamingVerificationSession dataclass has early_exit_on_match: bool = True",
-    "create_session() accepts and forwards the flag",
-    "Existing callers compile without changes"
-  ],
-  "estimated_lines_changed": 10
-}
-```
-
-```json
-{
-  "id": "T03",
-  "title": "Implement early-exit branch in process_chunk",
-  "type": "feature",
-  "priority": "high",
-  "layer": "service",
-  "file": "backend/app/services/verification_streaming.py",
-  "function_or_class": "RealtimeVerificationManager.process_chunk",
-  "description": "After session.chunk_results.append(result) and before the existing 'if session.chunks_processed >= session.max_chunks' block, insert: if session.early_exit_on_match and result.is_match: set session.final_status='verified', session.verified_at_chunk=session.chunks_processed, session.status=StreamingVerificationStatus.VERIFIED, set response['final_status']='verified', log success, call self._save_session_to_database(session), and return response immediately. Remove the comment 'REFACTORED: Process ALL chunks before deciding final result — No early return' as it is now inaccurate. The existing max_chunks block must remain intact as the fallback when EARLY_EXIT_ON_MATCH is False or all individual chunks fail to match.",
-  "depends_on": ["T02"],
-  "context_files": [
-    "backend/app/services/verification_streaming.py"
-  ],
-  "acceptance_criteria": [
-    "early_exit_on_match=True + chunk 1 is_match=True → response.final_status='verified', verified_at_chunk=1",
-    "early_exit_on_match=True + chunk 1 is_match=False → session continues",
-    "early_exit_on_match=False → original all-chunks logic unchanged",
-    "_save_session_to_database called exactly once on early exit"
-  ],
-  "estimated_lines_changed": 20
+  "estimated_lines_changed": 8
 }
 ```
 
@@ -300,14 +255,14 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "layer": "service",
   "file": "backend/app/agent/session_cache.py",
   "function_or_class": "AgentSessionCache",
-  "description": "Create backend/app/agent/__init__.py (empty) and backend/app/agent/session_cache.py. Define a module-level _cache: dict[str, dict] = {}. Expose four public functions: (1) set_verified(client_id: str, phone_number: str) -> None — writes {'verified': True, 'phone_number': phone_number, 'agent_audio_buffer': b'', 'speech_detected': False, 'last_speech_ts': 0.0}; (2) get(client_id: str) -> dict | None; (3) delete(client_id: str) -> None; (4) update(client_id: str, **kwargs) -> None — merges kwargs into existing entry, no-op for unknown IDs. No threading.Lock needed. Do not import any service, route, or db layer.",
-  "depends_on": [],
-  "context_files": [],
+  "description": "Create backend/app/agent/__init__.py (empty) and backend/app/agent/session_cache.py. Define a module-level _cache: dict[str, dict] = {}. Import UtteranceDetector from agent.vad and settings from core.config. Expose four public functions: (1) set_verified(client_id: str, phone_number: str) -> None — writes {'verified': True, 'phone_number': phone_number, 'vad': UtteranceDetector(settings.VAD_SILENCE_THRESHOLD_RMS, settings.VAD_SILENCE_DURATION_MS), 'conversation_history': []}; (2) get(client_id: str) -> dict | None; (3) delete(client_id: str) -> None; (4) update(client_id: str, **kwargs) -> None — merges kwargs into existing entry, no-op for unknown IDs. No threading.Lock needed. Do not import any service, route, or db layer. The conversation_history list stores dicts of the form {'role': 'user' | 'assistant', 'text': str} and is never persisted to the database.",
+  "depends_on": ["T06"],
+  "context_files": ["backend/app/agent/vad.py"],
   "acceptance_criteria": [
-    "set_verified() creates all five required keys",
+    "set_verified() creates all four required keys including a fresh UtteranceDetector instance",
+    "set_verified() creates conversation_history: []",
     "get() returns None for unknown client_id",
-    "update() is a no-op for unknown client_id",
-    "No external imports other than stdlib"
+    "update() is a no-op for unknown client_id"
   ],
   "estimated_lines_changed": 40
 }
@@ -322,19 +277,18 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "layer": "ml",
   "file": "backend/app/agent/vad.py",
   "function_or_class": "UtteranceDetector",
-  "description": "Create backend/app/agent/vad.py. Define class UtteranceDetector(silence_threshold_rms: float, silence_duration_ms: int). Public method process_chunk(audio_bytes: bytes, sample_rate: int, state: dict) -> tuple[bool, bytes]. Behaviour: (1) Read audio_bytes with soundfile into float32 samples. (2) Compute RMS = sqrt(mean(samples**2)). (3) If RMS >= threshold: set state['speech_detected']=True, state['last_speech_ts']=time.monotonic(), append audio_bytes to state['agent_audio_buffer']. (4) If state['speech_detected'] is True AND RMS < threshold AND (time.monotonic() - state['last_speech_ts']) * 1000 >= silence_duration_ms: clear buffer/flags in state, return (True, captured_audio). (5) Otherwise return (False, b''). Export get_utterance_detector() singleton that constructs from settings.",
+  "description": "Create backend/app/agent/vad.py. Define class UtteranceDetector with constructor __init__(self, silence_threshold_rms: float, silence_duration_ms: int). Internal instance state: _buffer: bytes = b'', _speech_detected: bool = False, _last_speech_ts: float = 0.0. Public method process_chunk(audio_bytes: bytes, sample_rate: int) -> tuple[bool, bytes]. Behaviour: (1) Read audio_bytes with soundfile into float32 samples. (2) Compute RMS = sqrt(mean(samples**2)). (3) If RMS >= threshold: set self._speech_detected=True, self._last_speech_ts=time.monotonic(), append audio_bytes to self._buffer. (4) If self._speech_detected is True AND RMS < threshold AND (time.monotonic() - self._last_speech_ts) * 1000 >= silence_duration_ms: capture = self._buffer, reset self._buffer=b'', self._speech_detected=False, self._last_speech_ts=0.0, return (True, capture). (5) Otherwise return (False, b''). Do NOT export a singleton — each call to session_cache.set_verified() creates a fresh instance.",
   "depends_on": ["T01"],
   "context_files": [
-    "backend/app/core/config.py",
-    "backend/app/agent/session_cache.py"
+    "backend/app/core/config.py"
   ],
   "acceptance_criteria": [
     "Returns (False, b'') while buffer is still accumulating",
     "Returns (True, <audio>) after speech followed by VAD_SILENCE_DURATION_MS of silence",
-    "Clears state after returning True so next call starts a fresh utterance",
-    "get_utterance_detector() returns the same singleton on repeated calls"
+    "Resets all internal state after returning True so next call starts a fresh utterance",
+    "process_chunk() takes only audio_bytes and sample_rate — no external state dict"
   ],
-  "estimated_lines_changed": 70
+  "estimated_lines_changed": 55
 }
 ```
 
@@ -394,15 +348,16 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "layer": "model",
   "file": "backend/app/agent/state.py",
   "function_or_class": "AgentState",
-  "description": "Create backend/app/agent/state.py. Define AgentState as a TypedDict with six fields: messages: Annotated[list[BaseMessage], add_messages] (LangGraph append reducer); user_phone: str (verified phone number from session cache); utterance: str (Whisper transcription of current query); generated_sql: str (output of query_compiler); sql_result: str (JSON string output of tool_executor); error_count: int (incremented by security_supervisor on each retry, max 3). Import BaseMessage from langchain_core.messages, add_messages from langgraph.graph.message, Annotated from typing.",
+  "description": "Create backend/app/agent/state.py. Define AgentState as a TypedDict with seven fields: messages: Annotated[list[BaseMessage], add_messages] (LangGraph append reducer); user_phone: str (verified phone number from session cache); utterance: str (Whisper transcription of current query); generated_sql: str (output of query_compiler); sql_result: str (JSON string output of tool_executor); error_count: int (incremented by security_supervisor on each retry, max 3); conversation_history: list[dict] (text-only prior turns from the session cache — each entry is {'role': 'user' | 'assistant', 'text': str}, passed in at invocation time, not modified by graph nodes). Import BaseMessage from langchain_core.messages, add_messages from langgraph.graph.message, Annotated from typing.",
   "depends_on": ["T04"],
   "context_files": [],
   "acceptance_criteria": [
     "AgentState importable from app.agent.state",
-    "All six fields present with correct types",
-    "messages uses add_messages reducer"
+    "All seven fields present with correct types",
+    "messages uses add_messages reducer",
+    "conversation_history field is list[dict]"
   ],
-  "estimated_lines_changed": 20
+  "estimated_lines_changed": 22
 }
 ```
 
@@ -438,7 +393,7 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "layer": "service",
   "file": "backend/app/agent/nodes/query_compiler.py",
   "function_or_class": "build_query_compiler_node",
-  "description": "Create backend/app/agent/nodes/__init__.py (empty) and backend/app/agent/nodes/query_compiler.py. Define build_query_compiler_node(llm) -> Callable[[AgentState], dict]. The returned async node: (1) builds a system prompt with a hardcoded transactions schema (id, phone_number, amount, merchant, timestamp) and instructs the LLM to produce a SELECT SQL with WHERE phone_number = '{state[user_phone]}'; (2) appends any SECURITY ERROR SystemMessage from state['messages'] for self-correction; (3) invokes the LLM with state['utterance'] as the user message; (4) extracts SQL from ```sql...``` fences or takes the full output; (5) returns {'generated_sql': sql}.",
+  "description": "Create backend/app/agent/nodes/__init__.py (empty) and backend/app/agent/nodes/query_compiler.py. Define build_query_compiler_node(llm) -> Callable[[AgentState], dict]. The returned async node: (1) builds a system prompt with a hardcoded transactions schema (id, phone_number, amount, merchant, timestamp) and instructs the LLM to produce a SELECT SQL with WHERE phone_number = '{state[user_phone]}'; (2) if state['conversation_history'] is non-empty, serialise it as a formatted prior-turns block (e.g. 'Previous conversation:\\nUser: ...\\nAssistant: ...') and prepend it to the user message so the LLM has full context; (3) appends any SECURITY ERROR SystemMessage from state['messages'] for self-correction; (4) invokes the LLM with state['utterance'] as the current user message; (5) extracts SQL from ```sql...``` fences or takes the full output; (6) returns {'generated_sql': sql}.",
   "depends_on": ["T09", "T10"],
   "context_files": [
     "backend/app/agent/state.py",
@@ -447,10 +402,11 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "acceptance_criteria": [
     "Returns dict with generated_sql",
     "System prompt includes state['user_phone']",
+    "Prior conversation turns injected into prompt when conversation_history is non-empty",
     "SECURITY ERROR messages forwarded for self-correction",
     "SQL extracted correctly from fenced blocks"
   ],
-  "estimated_lines_changed": 55
+  "estimated_lines_changed": 65
 }
 ```
 
@@ -564,7 +520,7 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "layer": "service",
   "file": "backend/app/services/voice_agent.py",
   "function_or_class": "VoiceAgentOrchestrator",
-  "description": "Create backend/app/services/voice_agent.py. Define class VoiceAgentOrchestrator and module-level singleton get_voice_agent(). Public async method process_audio_chunk(client_id, audio_bytes, sample_rate, send_ws). Logic: (1) session = AgentSessionCache.get(client_id). If None or not session['verified']: tts = await synthesise_speech(PROMPT_NOT_VERIFIED); send_ws({'type':'agent_audio','data':b64(tts).decode()}); return. (2) utterance_complete, audio = get_utterance_detector().process_chunk(audio_bytes, sample_rate, session). If not utterance_complete: return. (3) send_ws({'type':'agent_thinking'}). (4) transcription = await transcribe_audio(audio). If len(transcription.split()) < 3: send agent_audio PROMPT_ASK_AGAIN; return. (5) Build initial_state with user_phone from session, utterance=transcription. (6) Try final_state = await get_graph().ainvoke(initial_state). Extract last AIMessage content as spoken. Except ValueError: spoken = 'Sorry, I could not process that safely.' (7) tts = await synthesise_speech(spoken); send_ws({'type':'agent_audio','data':b64(tts),'transcript':transcription,'text':spoken}).",
+  "description": "Create backend/app/services/voice_agent.py. Define class VoiceAgentOrchestrator and module-level singleton get_voice_agent(). Public async method process_audio_chunk(client_id, audio_bytes, sample_rate, send_ws). Logic: (1) session = AgentSessionCache.get(client_id). If None or not session['verified']: tts = await synthesise_speech(PROMPT_NOT_VERIFIED); send_ws({'type':'agent_audio','data':b64(tts).decode()}); return. (2) utterance_complete, audio = session['vad'].process_chunk(audio_bytes, sample_rate). If not utterance_complete: return. (3) send_ws({'type':'agent_thinking'}). (4) transcription = await transcribe_audio(audio). If len(transcription.split()) < 3: send agent_audio PROMPT_ASK_AGAIN; return (do NOT append to conversation_history). (5) Build initial_state with user_phone from session, utterance=transcription, conversation_history=list(session['conversation_history']). (6) Try final_state = await get_graph().ainvoke(initial_state). Extract last AIMessage content as spoken. Except ValueError: spoken = 'Sorry, I could not process that safely.' (7) Append {'role':'user','text':transcription} and {'role':'assistant','text':spoken} to session['conversation_history'] via AgentSessionCache.update(). (8) tts = await synthesise_speech(spoken); send_ws({'type':'agent_audio','data':b64(tts),'transcript':transcription,'text':spoken}).",
   "depends_on": ["T05", "T06", "T07", "T08", "T09", "T15"],
   "context_files": [
     "backend/app/agent/session_cache.py",
@@ -577,12 +533,13 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "acceptance_criteria": [
     "Sends PROMPT_NOT_VERIFIED TTS when session is unverified or absent",
     "Returns immediately (no send) while utterance is still accumulating",
-    "Sends PROMPT_ASK_AGAIN TTS when transcription is fewer than 3 words",
+    "Sends PROMPT_ASK_AGAIN TTS when transcription is fewer than 3 words; history NOT updated",
+    "Appends user utterance and assistant response to session conversation_history on successful turn",
     "Sends agent_audio with spoken LangGraph response on success",
     "send_ws called with correct shapes in all paths",
     "No direct DB calls inside this function"
   ],
-  "estimated_lines_changed": 75
+  "estimated_lines_changed": 90
 }
 ```
 
@@ -595,8 +552,8 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "layer": "service",
   "file": "backend/app/services/verification_streaming.py",
   "function_or_class": "RealtimeVerificationManager._save_session_to_database",
-  "description": "In RealtimeVerificationManager, after every code path that sets session.final_status = 'verified' — both the new early-exit branch (T03) and the existing all-chunks path — call AgentSessionCache.set_verified(client_id=session.session_id, phone_number=session.phone_number). Import set_verified from app.agent.session_cache. First, confirm that session.session_id is the WebSocket client_id by tracing create_session() callers in events.py. If it is not the client_id, add a client_id: str = '' field to StreamingVerificationSession and populate it from events.py at session creation. The cache write must happen before _save_session_to_database returns so the very next audio chunk is correctly routed.",
-  "depends_on": ["T03", "T05"],
+  "description": "In RealtimeVerificationManager, after every code path that sets session.final_status = 'verified' — the existing all-chunks path — call AgentSessionCache.set_verified(client_id=session.session_id, phone_number=session.phone_number). Import set_verified from app.agent.session_cache. First, confirm that session.session_id is the WebSocket client_id by tracing create_session() callers in events.py. If it is not the client_id, add a client_id: str = '' field to StreamingVerificationSession and populate it from events.py at session creation. The cache write must happen before _save_session_to_database returns so the very next audio chunk is correctly routed. The newly created cache entry will have conversation_history initialized to [] by set_verified().",
+  "depends_on": ["T05"],
   "context_files": [
     "backend/app/services/verification_streaming.py",
     "backend/app/agent/session_cache.py",
@@ -604,8 +561,9 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   ],
   "acceptance_criteria": [
     "AgentSessionCache.get(session_id)['verified'] == True immediately after verification success",
+    "AgentSessionCache.get(session_id)['conversation_history'] == [] on creation",
     "phone_number correctly populated in cache",
-    "Cache write occurs in both early-exit and full multi-chunk verified paths"
+    "Cache write occurs in the full multi-chunk verified path"
   ],
   "estimated_lines_changed": 15
 }
@@ -637,4 +595,3 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "estimated_lines_changed": 20
 }
 ```
-
