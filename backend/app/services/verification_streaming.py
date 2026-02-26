@@ -16,6 +16,7 @@ import io
 from app.ml.embedding import generate_embedding, calculate_cosine_similarity
 from app.db.embeddings import get_voice_embedding
 from app.db.verified_sessions import save_verified_session
+from app.agent.session_cache import set_verified as agent_set_verified
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,10 @@ class StreamingVerificationSession:
     chunks_processed: int = 0
     chunk_results: List[ChunkVerificationResult] = field(default_factory=list)
     
+    # WebSocket client_id — populated by the caller so the agent session cache
+    # can be keyed to the connection rather than the internal session UUID.
+    client_id: str = ""
+
     # Final result
     final_status: Optional[str] = None
     verified_at_chunk: Optional[int] = None
@@ -470,8 +475,24 @@ class RealtimeVerificationManager:
                 f"(status: {session.final_status}, avg_similarity: {avg_similarity:.4f})"
             )
             
+            # Write to agent session cache so subsequent audio is routed to
+            # voice-agent mode.  Use client_id when set, fall back to session_id.
+            if session.final_status == "verified":
+                cache_key = session.client_id or session.session_id
+                try:
+                    agent_set_verified(
+                        client_id=cache_key,
+                        phone_number=session.phone_number,
+                    )
+                    logger.info(
+                        f"AgentSessionCache populated for client {cache_key[:8]} "
+                        f"(phone={session.phone_number})"
+                    )
+                except Exception as cache_err:
+                    logger.warning(f"Failed to write AgentSessionCache: {cache_err}")
+
             return doc_id
-            
+
         except Exception as e:
             logger.error(
                 f"Failed to save session {session.session_id[:8]} to database: {str(e)}",

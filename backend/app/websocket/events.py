@@ -171,7 +171,40 @@ class WebSocketEventHandler:
         """Handle incoming audio chunk"""
         try:
             client_id = connection.client_id
-            
+
+            # ------------------------------------------------------------------
+            # Agent mode: if this client has a verified session in the cache,
+            # route the audio to VoiceAgentOrchestrator instead of the biometric
+            # buffer path.  The orchestrator sends all async TTS frames directly
+            # via send_ws; we only return a synchronous ACK here.
+            # ------------------------------------------------------------------
+            from app.agent.session_cache import get as get_agent_session
+            from app.services.voice_agent import get_voice_agent
+
+            agent_session = get_agent_session(client_id)
+            if agent_session is not None:
+                audio_data_b64 = message.get("data", "")
+                try:
+                    audio_bytes = base64.b64decode(audio_data_b64)
+                except Exception as decode_err:
+                    logger.error(f"Failed to decode audio data for agent: {decode_err}")
+                    return WebSocketMessageBuilder.create_error_message(
+                        "decode_error",
+                        f"Failed to decode audio data: {decode_err}"
+                    )
+
+                await get_voice_agent().process_audio_chunk(
+                    client_id=client_id,
+                    audio_bytes=audio_bytes,
+                    sample_rate=16000,
+                    send_ws=connection.send_json,
+                )
+                return {"type": "audio_ack", "status": "ok"}
+
+            # ------------------------------------------------------------------
+            # Biometric buffer path (unauthenticated / still verifying)
+            # ------------------------------------------------------------------
+
             # Ensure buffer exists
             if client_id not in self.audio_buffers:
                 self.audio_buffers[client_id] = AudioBuffer()
@@ -397,6 +430,18 @@ class WebSocketEventHandler:
                 connection.set_state(ConnectionState.IDLE)
                 connection.set_metadata("verified_phone", matched_phone_number)
                 connection.set_metadata("verified_at", datetime.now().isoformat())
+
+                # Register verified session in the agent session cache so that
+                # subsequent audio chunks from this connection are routed to
+                # VoiceAgentOrchestrator (T18).
+                try:
+                    from app.agent.session_cache import set_verified as _agent_set_verified
+                    _agent_set_verified(
+                        client_id=connection.client_id,
+                        phone_number=matched_phone_number,
+                    )
+                except Exception as _cache_err:
+                    logger.warning("Failed to write AgentSessionCache: %s", _cache_err)
                 
                 # Log before sending response
                 logger.info("Sending verification result to frontend: SUCCESS")

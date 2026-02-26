@@ -15,6 +15,16 @@ class Settings(BaseSettings):
     WS_MAX_MESSAGE_SIZE: int = 1048576
     WS_MAX_BUFFER_SIZE: int = 10000000
 
+    # Agent / LLM settings
+    OPENAI_API_KEY: str = ""
+    LLM_PROVIDER: str = "openai"  # "openai" or "gemini"
+    GOOGLE_PROJECT_ID: str = ""
+    DATABASE_URL: str = ""  # PostgreSQL URL for MCP tool
+
+    # Voice Activity Detection settings
+    VAD_SILENCE_THRESHOLD_RMS: float = 0.01
+    VAD_SILENCE_DURATION_MS: int = 1500
+
     class Config:
         env_file = ".env"
         extra = "ignore"
