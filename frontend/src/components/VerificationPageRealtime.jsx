@@ -2,8 +2,8 @@
  * Real-Time Verification Page Component
  * Fully automatic verification without manual verify button
  * - User enters phone number
- * - Clicks "Receive Call"
- * - Verification starts automatically
+ * - Clicks "Initiate Call"
+ * - WebSocket connects and recording starts automatically
  * - Live similarity per chunk shown in real-time
  * - Auto-stops when verified or max chunks reached
  */
@@ -32,34 +32,28 @@ function VerificationPageRealtime() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [threshold, setThreshold] = useState(0.75);
+  const [isConnecting, setIsConnecting] = useState(false);
   
   // References
   const timerRef = useRef(null);
   const chunkingServiceRef = useRef(null);
+  const pendingStartRecordingRef = useRef(false);
   
   // Real-time verification hook
   const verification = useRealtimeVerification();
 
-  // Initialize audio service on mount
+  // Create audio service on mount — initialize() (which calls getUserMedia) is deferred
+  // to handleStartRecordingCore() so the mic permission prompt only appears when the
+  // user clicks "Initiate Call", not on page load.
   useEffect(() => {
-    const initializeAudioService = async () => {
-      try {
-        const service = new AudioChunkingService({
-          mode: 'verification',
-          onChunkReady: handleChunkReady,
-          onRecordingStarted: () => console.log('Recording started'),
-          onRecordingStopped: () => console.log('Recording stopped'),
-          onError: (error) => console.error('Audio error:', error),
-        });
-        
-        await service.initialize();
-        chunkingServiceRef.current = service;
-      } catch (error) {
-        console.error('Failed to initialize audio service:', error);
-      }
-    };
-
-    initializeAudioService();
+    const service = new AudioChunkingService({
+      mode: 'verification',
+      onChunkReady: handleChunkReady,
+      onRecordingStarted: () => console.log('Recording started'),
+      onRecordingStopped: () => console.log('Recording stopped'),
+      onError: (error) => console.error('Audio error:', error),
+    });
+    chunkingServiceRef.current = service;
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -78,18 +72,36 @@ function VerificationPageRealtime() {
     }
   }, [verification.isComplete]);
 
+  // Auto-start recording once WebSocket session is ready
+  useEffect(() => {
+    if (verification.isReady && pendingStartRecordingRef.current) {
+      pendingStartRecordingRef.current = false;
+      setIsConnecting(false);
+      handleStartRecordingCore();
+    }
+  }, [verification.isReady]);
+
   const handleChunkReady = async (chunkInfo) => {
     console.log('[VerificationPageRealtime] Chunk ready:', chunkInfo.chunkNumber);
-    
+
     try {
       // Encode as proper WAV file with RIFF headers
       const wavBlob = encodeWAV(chunkInfo.samples, chunkInfo.sampleRate);
       console.log('[VerificationPageRealtime] Created WAV blob size:', wavBlob.size, 'bytes');
-      
+
       // Submit chunk to verification service
       await verification.submitAudioChunk(wavBlob);
     } catch (error) {
       console.error('Failed to submit chunk:', error);
+      // If the WebSocket closed while we were recording, stop immediately
+      // so we don't keep trying to send chunks into a dead connection.
+      if (error.message === 'WebSocket not connected') {
+        console.warn('[VerificationPageRealtime] WebSocket lost — stopping recording');
+        if (chunkingServiceRef.current) chunkingServiceRef.current.stopRecording();
+        setIsRecording(false);
+        setRecordingTime(0);
+        if (timerRef.current) clearInterval(timerRef.current);
+      }
     }
   };
 
@@ -118,28 +130,61 @@ function VerificationPageRealtime() {
     }
   };
 
-  const handleStartRecording = async () => {
-    if (!verification.isReady) {
-      alert('Please start verification first');
-      return;
-    }
-
-    console.log('[VerificationPageRealtime] Starting recording and verification');
+  // Core recording start logic (no isReady guard — called after session confirmed ready)
+  const handleStartRecordingCore = async () => {
+    console.log('[VerificationPageRealtime] Starting recording');
     setRecordingTime(0);
-    
     try {
-      if (chunkingServiceRef.current) {
-        chunkingServiceRef.current.startRecording();
+      const service = chunkingServiceRef.current;
+      if (service) {
+        // Lazily initialize (requests mic permission) the first time recording starts.
+        // mediaStreamSource is null when the service was just created or after cleanup.
+        if (!service.mediaStreamSource) {
+          const ok = await service.initialize();
+          if (!ok) {
+            throw new Error('Microphone initialization failed');
+          }
+        }
+        service.startRecording();
         setIsRecording(true);
-
         timerRef.current = setInterval(() => {
           setRecordingTime((t) => t + 1);
         }, 1000);
       }
     } catch (err) {
       console.error('Recording error:', err);
-      alert('Failed to access microphone');
+      pendingStartRecordingRef.current = false;
+      setIsConnecting(false);
+      alert('Failed to access microphone. Please grant microphone permissions.');
     }
+  };
+
+  // Single entry point: connect WebSocket + auto-start recording when session ready
+  const handleInitiateCall = async () => {
+    if (!phoneNumber.trim()) {
+      alert('Please enter a phone number');
+      return;
+    }
+    try {
+      setIsConnecting(true);
+      pendingStartRecordingRef.current = true;
+      console.log('[VerificationPageRealtime] Initiating call for:', phoneNumber);
+      await verification.connectForVerification(phoneNumber.trim(), threshold);
+      // isReady will be set by SESSION_CREATED event → useEffect above starts recording
+    } catch (err) {
+      pendingStartRecordingRef.current = false;
+      setIsConnecting(false);
+      console.error('[VerificationPageRealtime] Failed to initiate call:', err);
+      alert(err.message || 'Failed to initiate call. Ensure the server is running.');
+    }
+  };
+
+  const handleStartRecording = async () => {
+    if (!verification.isReady) {
+      alert('Please initiate call first');
+      return;
+    }
+    await handleStartRecordingCore();
   };
 
   const handleStopRecording = () => {
@@ -150,6 +195,9 @@ function VerificationPageRealtime() {
     setIsRecording(false);
     setRecordingTime(0);
     if (timerRef.current) clearInterval(timerRef.current);
+    // Always disconnect the WebSocket when the user ends the call so the
+    // component returns to the idle form instead of showing "Awaiting microphone…"
+    verification.disconnect();
   };
 
   const handleCancelVerification = () => {
@@ -207,10 +255,10 @@ function VerificationPageRealtime() {
     <div className="max-w-2xl mx-auto p-6 bg-white rounded-lg shadow-lg">
       <h1 className="text-3xl font-bold mb-6 text-gray-800">Voice Verification</h1>
 
-      {/* Initial Setup Section */}
-      {!verification.isReady && (
+      {/* Setup + Initiate Call — visible until connected */}
+      {!verification.isReady && !verification.isComplete && (
         <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
-          <h2 className="text-lg font-semibold mb-4 text-gray-800">Setup Verification</h2>
+          <h2 className="text-lg font-semibold mb-4 text-gray-800">Voice Verification</h2>
 
           {/* Phone Number Input */}
           <div className="mb-4">
@@ -222,7 +270,8 @@ function VerificationPageRealtime() {
               value={phoneNumber}
               onChange={handlePhoneChange}
               placeholder="+1-555-0000"
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              disabled={isConnecting}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
             />
           </div>
 
@@ -238,7 +287,8 @@ function VerificationPageRealtime() {
               step="0.01"
               value={threshold}
               onChange={handleThresholdChange}
-              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              disabled={isConnecting}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
             />
             <p className="text-xs text-gray-500 mt-2">
               0.75 recommended. Lower = more lenient, Higher = stricter.
@@ -252,23 +302,33 @@ function VerificationPageRealtime() {
             </div>
           )}
 
-          {/* Start Button */}
+          {/* Initiate Call Button */}
           <button
-            onClick={handleStartVerification}
-            disabled={!phoneNumber.trim()}
-            className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 transition"
+            onClick={handleInitiateCall}
+            disabled={!phoneNumber.trim() || isConnecting}
+            className="w-full px-6 py-3 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 disabled:bg-gray-400 transition flex items-center justify-center gap-2"
           >
-            Initialize Verification
+            {isConnecting ? (
+              <>
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+                </svg>
+                Connecting...
+              </>
+            ) : (
+              <>📞 Initiate Call</>
+            )}
           </button>
 
           <div className="mt-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
             <p className="font-semibold mb-2">How it works:</p>
             <ol className="list-decimal list-inside space-y-1">
-              <li>Enter your phone number</li>
-              <li>Click "Initialize Verification"</li>
-              <li>Click "Receive Call"</li>
-              <li>Verification runs automatically on each chunk</li>
-              <li>Recording stops when verified or limit reached</li>
+              <li>Enter your enrolled phone number</li>
+              <li>Click "Initiate Call"</li>
+              <li>Recording starts automatically once connected</li>
+              <li>Verification runs on each audio chunk in real-time</li>
+              <li>Recording stops automatically when verified or limit reached</li>
             </ol>
           </div>
         </div>
@@ -320,12 +380,13 @@ function VerificationPageRealtime() {
           <div className="mb-6">
             <div className="flex gap-4 mb-4">
               {!isRecording ? (
-                <button
-                  onClick={handleStartRecording}
-                  className="flex-1 px-6 py-3 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition"
-                >
-                  📞 Receive Call
-                </button>
+                <div className="flex-1 flex items-center justify-center px-6 py-3 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-700 text-sm font-medium">
+                  <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+                  </svg>
+                  Awaiting microphone...
+                </div>
               ) : (
                 <>
                   <button
@@ -341,15 +402,7 @@ function VerificationPageRealtime() {
               )}
             </div>
 
-            {/* Stop Button */}
-            {verification.isReady && !verification.isComplete && (
-              <button
-                onClick={handleCancelVerification}
-                className="w-full px-6 py-2 bg-gray-500 text-white rounded-lg font-semibold hover:bg-gray-600 transition text-sm"
-              >
-                Cancel Verification
-              </button>
-            )}
+
           </div>
 
           {/* Chunk Results List with Live Chart */}

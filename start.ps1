@@ -114,7 +114,7 @@ function Start-Backend {
     Write-Host ""
     
     Set-Location backend
-    python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    python run.py
     Set-Location ..
 }
 

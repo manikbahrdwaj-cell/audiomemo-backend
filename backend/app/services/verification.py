@@ -12,7 +12,7 @@ import numpy as np
 import io
 from dataclasses import dataclass, field
 
-from app.ml.embedding import generate_embedding, generate_embedding_with_chunking, calculate_cosine_similarity
+from app.ml.embedding import generate_embedding, calculate_cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,10 @@ class VerificationSession:
     similarity_scores: List[float] = field(default_factory=list)
     final_similarity_score: Optional[float] = None
     verification_result: Optional[bool] = None
-    
+
+    # Error tracking
+    error_message: Optional[str] = None
+
     def __repr__(self) -> str:
         return (
             f"VerificationSession(id={self.session_id[:8]}, "
@@ -178,25 +181,20 @@ class VerificationSession:
             sf.write(audio_bytes, chunk.audio_data, chunk.sample_rate, format='WAV')
             audio_bytes.seek(0)
             
-            # Generate embedding with 5-second chunks for verification
-            # 5-second chunks = 80,000 samples at 16kHz
-            embedding = generate_embedding_with_chunking(
-                audio_bytes.read(),
-                chunk_size_seconds=5.0,          # 5-second chunks
-                overlap_ratio=0.2,               # 20% overlap
-                aggregation_method='mean'        # Average chunk embeddings
-            )
-            
+            # Generate embedding with single-pass (matches old branch behavior:
+            # generate_embedding() is called directly on the raw audio bytes,
+            # no sub-chunking and no Hann windowing applied here).
+            embedding = generate_embedding(audio_bytes.read())
+
             chunk.embedding = embedding
             chunk.embedding_timestamp = datetime.utcnow()
-            
+
             self.embeddings.append(embedding)
-            
+
             logger.info(
                 f"Processed verification chunk {chunk_idx + 1}/{len(self.chunks)} "
                 f"for session {self.session_id[:8]}: "
-                f"embedding shape {embedding.shape} "
-                f"(5-second chunking mode)"
+                f"embedding shape {embedding.shape}"
             )
             
             return embedding
@@ -296,21 +294,17 @@ class VerificationSession:
             )
             audio_bytes.seek(0)
             
-            # Generate embedding with 5-second chunks for verification
-            embedding = generate_embedding_with_chunking(
-                audio_bytes.read(),
-                chunk_size_seconds=5.0,          # 5-second chunks
-                overlap_ratio=0.2,               # 20% overlap
-                aggregation_method='mean'        # Average chunk embeddings
-            )
-            
+            # Single-pass embedding on the merged audio — matches the old branch
+            # which called generate_embedding() without any sub-chunking or
+            # windowing, then computed cosine similarity on the raw vector.
+            embedding = generate_embedding(audio_bytes.read())
+
             self.merged_audio_embedding = embedding
-            
-            # Normalize embedding
-            norm = np.linalg.norm(embedding)
-            if norm > 0:
-                self.merged_audio_embedding = embedding / norm
-            
+            # NOTE: Do NOT pre-normalize here.  verify_against_enrolled() calls
+            # calculate_cosine_similarity(), which normalises both vectors
+            # internally (via scipy cosine distance), exactly as the old branch
+            # verify_phone_number_embedding() did.
+
             logger.info(
                 f"✓ Generated embedding from merged verification audio: "
                 f"shape {self.merged_audio_embedding.shape}"
@@ -412,75 +406,111 @@ class VerificationSession:
 
 # ========== SESSION MANAGEMENT ==========
 
-# Global verification sessions storage (in production, use database)
-_verification_sessions: dict = {}
+from app.services.base_session import BaseSessionManager
 
 
-def get_verification_manager() -> dict:
-    """Get verification sessions manager"""
-    return _verification_sessions
+class VerificationServiceManager(BaseSessionManager):
+    """
+    Manager for active verification sessions.
+    Mirrors EnrollmentServiceManager interface.
+    """
+
+    def create_session(
+        self, phone_number: str, config: Optional[VerificationSessionConfig] = None
+    ) -> VerificationSession:
+        """Create and store a verification session, loading enrolled embedding."""
+        from app.db.embeddings import get_voice_embedding
+
+        session = VerificationSession(
+            phone_number=phone_number,
+            config=config or VerificationSessionConfig()
+        )
+
+        enrolled_doc = get_voice_embedding(phone_number)
+        if enrolled_doc is not None:
+            session.enrolled_embedding = np.array(enrolled_doc["embedding"], dtype=np.float32)
+
+        self._sessions[session.session_id] = session
+        logger.info(f"Created verification session {session.session_id[:8]} for {phone_number}")
+        return session
+
+    def find_session_by_phone(self, phone_number: str) -> Optional[VerificationSession]:
+        """Return the first active session for a phone number, or None."""
+        for session in self._sessions.values():
+            if session.phone_number == phone_number and session.status in [
+                VerificationStatus.CREATED,
+                VerificationStatus.ACTIVE,
+                VerificationStatus.PROCESSING,
+            ]:
+                return session  # type: ignore[return-value]
+        return None
+
+    def list_sessions(self) -> List[dict]:
+        """Return summary dicts for all sessions."""
+        return [s.to_dict() for s in self._sessions.values()]  # type: ignore[attr-defined]
+
+    def cleanup_expired_sessions(self, max_age_seconds: int = 3600) -> int:
+        """Remove sessions older than max_age_seconds, return count removed."""
+        now = datetime.utcnow()
+        expired = [
+            sid for sid, s in self._sessions.items()
+            if (now - s.created_at).total_seconds() > max_age_seconds  # type: ignore[attr-defined]
+        ]
+        for sid in expired:
+            self.remove_session(sid)
+        return len(expired)
+
+
+# Global singleton
+_verification_manager: Optional[VerificationServiceManager] = None
+
+
+def get_verification_manager() -> VerificationServiceManager:
+    """Return the global verification session manager."""
+    global _verification_manager
+    if _verification_manager is None:
+        _verification_manager = VerificationServiceManager()
+    return _verification_manager
 
 
 def create_verification_session(phone_number: str, config: Optional[VerificationSessionConfig] = None) -> VerificationSession:
     """
     Create a new verification session
-    
+
     Args:
         phone_number: Phone number to verify
         config: Optional session configuration
-        
+
     Returns:
         VerificationSession instance
     """
-    from app.db.mongodb import get_voice_embedding
-    
-    session = VerificationSession(
-        phone_number=phone_number,
-        config=config or VerificationSessionConfig()
-    )
-    
-    # Get enrolled embedding
-    enrolled_embedding = get_voice_embedding(phone_number)
-    if enrolled_embedding is not None:
-        session.enrolled_embedding = np.array(enrolled_embedding)
-    
-    _verification_sessions[session.session_id] = session
-    
-    logger.info(f"Created verification session {session.session_id[:8]} for {phone_number}")
-    return session
+    return get_verification_manager().create_session(phone_number, config)
 
 
 def get_verification_session(session_id: str) -> Optional[VerificationSession]:
     """
     Get verification session by ID
-    
+
     Args:
         session_id: Session ID
-        
+
     Returns:
         VerificationSession or None
     """
-    return _verification_sessions.get(session_id)
+    return get_verification_manager().get_session(session_id)  # type: ignore[return-value]
 
 
 def find_verification_session_by_phone(phone_number: str) -> Optional[VerificationSession]:
     """
     Find an active verification session by phone number
-    
+
     Args:
         phone_number: Phone number to search for
-        
+
     Returns:
         VerificationSession if found and active, None otherwise
     """
-    for session in _verification_sessions.values():
-        if session.phone_number == phone_number and session.status in [
-            VerificationStatus.CREATED,
-            VerificationStatus.ACTIVE,
-            VerificationStatus.PROCESSING
-        ]:
-            return session
-    return None
+    return get_verification_manager().find_session_by_phone(phone_number)
 
 
 def add_verification_chunk(

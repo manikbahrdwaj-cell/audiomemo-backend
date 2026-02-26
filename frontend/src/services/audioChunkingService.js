@@ -37,8 +37,15 @@ class AudioChunkingService {
 
     // Buffering and chunking
     this.audioBuffer = [];
-    this.chunkSize = options.chunkSize || AUDIO_CONFIG.ENROLLMENT_CHUNK_SAMPLES;
     this.mode = options.mode || 'enrollment'; // 'enrollment' or 'verification'
+    // Derive chunkSize from mode when not explicitly provided
+    if (options.chunkSize) {
+      this.chunkSize = options.chunkSize;
+    } else if (this.mode === 'verification') {
+      this.chunkSize = AUDIO_CONFIG.VERIFICATION_CHUNK_SAMPLES; // 80000 = 5 s at 16 kHz
+    } else {
+      this.chunkSize = AUDIO_CONFIG.ENROLLMENT_CHUNK_SAMPLES;   // 16000 = 1 s at 16 kHz
+    }
     this.sampleRate = options.sampleRate || AUDIO_CONFIG.SAMPLE_RATE;
 
     // State tracking

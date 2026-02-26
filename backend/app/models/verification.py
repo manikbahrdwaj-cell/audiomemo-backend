@@ -16,6 +16,7 @@ class VerificationSessionResponse(BaseModel):
     started_at: Optional[str] = None
     chunks_collected: int
     max_chunks: int
+    embeddings_generated: int = 0
     verified: bool = True  # Whether the phone number is enrolled
     error_message: Optional[str] = None
 

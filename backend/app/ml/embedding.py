@@ -32,8 +32,9 @@ def _patched_hf_hub_download(*args, **kwargs):
     # WORKAROUND: If trying to download custom.py, serve it from local directory
     if len(args) > 1 and args[1] == "custom.py":
         # Return local custom.py path instead of downloading
-        backend_dir = Path(__file__).parent
-        local_custom_py = backend_dir.parent / "pretrained_models" / "spkrec-ecapa-voxceleb" / "custom.py"
+        # embedding.py lives at backend/app/ml/ so go 3 levels up to reach backend/
+        backend_dir = Path(__file__).parent.parent.parent
+        local_custom_py = backend_dir / "pretrained_models" / "spkrec-ecapa-voxceleb" / "custom.py"
         if local_custom_py.exists():
             # Return the local path
             return str(local_custom_py)
@@ -191,7 +192,8 @@ def get_model():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Using device: {device}")
         
-        backend_dir = Path(__file__).parent
+        # embedding.py lives at backend/app/ml/ — go 3 levels up to reach backend/
+        backend_dir = Path(__file__).parent.parent.parent
         model_dir = backend_dir / "pretrained_models" / "spkrec-ecapa-voxceleb"
         model_dir.mkdir(parents=True, exist_ok=True)
         
@@ -203,20 +205,25 @@ def get_model():
         # Clean up any problematic files
         _cleanup_model_directory(model_dir)
         
-        # Pre-copy model files from cache to avoid symlink issues
-        try:
-            hf_cache = Path.home() / ".cache" / "huggingface" / "hub" / "models--speechbrain--spkrec-ecapa-voxceleb"
-            snapshots_dir = hf_cache / "snapshots"
-            
-            if snapshots_dir.exists():
-                snapshot_dirs = sorted(snapshots_dir.glob("*"), reverse=True)
-                if snapshot_dirs:
-                    latest_snapshot = snapshot_dirs[0]
-                    logger.info(f"Pre-copying files from cache snapshot: {latest_snapshot}")
-                    _copy_model_files_locally(latest_snapshot, model_dir)
-                    time.sleep(0.5)  # Small delay to ensure file system is ready
-        except Exception as e:
-            logger.warning(f"Could not pre-copy model files: {e}")
+        # Only copy from HuggingFace cache when local model files are missing.
+        # If embedding_model.ckpt already exists, skip to avoid WinError 1314.
+        _key_model_file = model_dir / "embedding_model.ckpt"
+        if not _key_model_file.exists():
+            try:
+                hf_cache = Path.home() / ".cache" / "huggingface" / "hub" / "models--speechbrain--spkrec-ecapa-voxceleb"
+                snapshots_dir = hf_cache / "snapshots"
+                
+                if snapshots_dir.exists():
+                    snapshot_dirs = sorted(snapshots_dir.glob("*"), reverse=True)
+                    if snapshot_dirs:
+                        latest_snapshot = snapshot_dirs[0]
+                        logger.info(f"Pre-copying files from cache snapshot: {latest_snapshot}")
+                        _copy_model_files_locally(latest_snapshot, model_dir)
+                        time.sleep(0.5)  # Small delay to ensure file system is ready
+            except Exception as e:
+                logger.warning(f"Could not pre-copy model files: {e}")
+        else:
+            logger.info(f"Local model files already present at {model_dir}, skipping cache copy")
         
         # Load the model
         try:
@@ -298,26 +305,54 @@ def preprocess_audio(audio_bytes: bytes) -> torch.Tensor:
 def generate_embedding(audio_bytes: bytes) -> np.ndarray:
     """
     Generate a 192-dimensional voice embedding from audio bytes
-    
+
     Args:
         audio_bytes: WAV file bytes (16kHz mono preferred)
-        
+
     Returns:
         numpy array of shape (192,) containing the speaker embedding
     """
+    logger.debug(
+        "generate_embedding() called | input_size=%d bytes", len(audio_bytes)
+    )
+    t0 = time.perf_counter()
+
     model = get_model()
-    
+
     # Preprocess audio
+    logger.debug("Preprocessing audio...")
+    t_pre = time.perf_counter()
     waveform = preprocess_audio(audio_bytes)
-    
-    # Generate embedding
+    pre_ms = (time.perf_counter() - t_pre) * 1_000
+    duration_s = len(waveform) / 16_000
+    logger.debug(
+        "Audio preprocessed | duration=%.3fs samples=%d preprocess_time=%.2fms",
+        duration_s,
+        len(waveform),
+        pre_ms,
+    )
+
+    # Generate embedding via ECAPA-TDNN
+    logger.debug("Running ECAPA-TDNN encoder...")
+    t_enc = time.perf_counter()
     with torch.no_grad():
         embedding = model.encode_batch(waveform.unsqueeze(0))
         embedding = embedding.squeeze().cpu().numpy()
-    
+    enc_ms = (time.perf_counter() - t_enc) * 1_000
+
     # Ensure we have a 192-dimensional vector
     assert embedding.shape == (192,), f"Expected 192-dim embedding, got {embedding.shape}"
-    
+
+    total_ms = (time.perf_counter() - t0) * 1_000
+    logger.info(
+        "Embedding generated | shape=%s norm=%.4f "
+        "encode_time=%.2fms total_time=%.2fms audio_duration=%.3fs",
+        embedding.shape,
+        float(np.linalg.norm(embedding)),
+        enc_ms,
+        total_ms,
+        duration_s,
+    )
     return embedding
 
 def calculate_cosine_similarity(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
@@ -353,26 +388,34 @@ def calculate_cosine_similarity(embedding1: np.ndarray, embedding2: np.ndarray) 
         # Validate inputs
         embedding1 = np.asarray(embedding1, dtype=np.float32)
         embedding2 = np.asarray(embedding2, dtype=np.float32)
-        
+
         if embedding1.size == 0 or embedding2.size == 0:
+            logger.warning(
+                "calculate_cosine_similarity() called with empty embedding(s) — returning 0.0"
+            )
             return 0.0
-        
-        # Calculate cosine distance using scipy (returns distance, not similarity)
-        # Cosine distance = 1 - cosine_similarity, so we subtract from 1
+
+        logger.debug(
+            "Calculating cosine similarity | emb1_norm=%.4f emb2_norm=%.4f",
+            float(np.linalg.norm(embedding1)),
+            float(np.linalg.norm(embedding2)),
+        )
+
+        # scipy cosine() returns distance in [0, 2]; 0 = identical, 2 = opposite
         cosine_distance = cosine(embedding1, embedding2)
-        
-        # Convert distance to similarity ([-1, 1] -> [0, 1])
-        # scipy's cosine returns a distance in [0, 2] where:
-        # 0 = identical, 1 = orthogonal, 2 = opposite
-        # We want similarity in [0, 1] where:
-        # 1 = identical, 0.5 = orthogonal, 0 = opposite
         similarity = 1.0 - cosine_distance
-        similarity = (similarity + 1.0) / 2.0  # Normalize to [0, 1]
-        
-        return float(np.clip(similarity, 0.0, 1.0))
-        
+        similarity = (similarity + 1.0) / 2.0  # Normalise to [0, 1]
+        similarity = float(np.clip(similarity, 0.0, 1.0))
+
+        logger.debug(
+            "Cosine similarity result | distance=%.6f similarity=%.6f",
+            cosine_distance,
+            similarity,
+        )
+        return similarity
+
     except Exception as e:
-        logger.warning(f"Error calculating cosine similarity: {e}")
+        logger.warning("Error calculating cosine similarity: %s", e)
         return 0.0
 
 def generate_embedding_with_chunking(

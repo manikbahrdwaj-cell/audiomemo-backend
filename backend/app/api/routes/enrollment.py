@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
 from app.models.enrollment import (
     EnrollmentSessionResponse,
@@ -18,6 +20,8 @@ from app.db.embeddings import store_voice_embedding, get_voice_embedding, check_
 from app.ml.embedding import generate_embedding
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
 
 @router.post("/enrollment/session", response_model=EnrollmentSessionResponse)
 async def create_new_enrollment_session(
@@ -46,20 +50,33 @@ async def create_new_enrollment_session(
         HTTPException: 409 Conflict if phone number already enrolled
     """
     from app.db.embeddings import check_enrollment
-    
+
+    logger.info(
+        "create_new_enrollment_session() | phone=%s max_chunks=%d merge=%s",
+        phone_number,
+        max_chunks,
+        merge_embeddings,
+    )
+
     # Check if phone number is already enrolled (duplicate prevention)
     is_enrolled = check_enrollment(phone_number)
     if is_enrolled:
+        logger.warning("Duplicate enrollment attempt | phone=%s", phone_number)
         raise HTTPException(
             status_code=409,
-            detail=f"This number is already enrolled. Duplicate enrollment is not allowed."
+            detail="This number is already enrolled. Duplicate enrollment is not allowed.",
         )
-    
+
     # Check for existing active session with the same phone number
     enrollment_manager = get_enrollment_manager()
     existing_session = enrollment_manager.find_session_by_phone(phone_number)
-    
+
     if existing_session:
+        logger.info(
+            "Returning existing enrollment session | phone=%s session_id=%s",
+            phone_number,
+            existing_session.session_id,
+        )
         return EnrollmentSessionResponse(
             session_id=existing_session.session_id,
             phone_number=existing_session.phone_number,
@@ -69,20 +86,26 @@ async def create_new_enrollment_session(
             chunks_collected=len(existing_session.chunks),
             max_chunks=existing_session.config.max_chunks,
             embeddings_generated=len(existing_session.embeddings),
-            verified=False,  # Phone number not enrolled yet
-            error_message=None
+            verified=False,
+            error_message=None,
         )
-    
+
     # Create session configuration
     config = EnrollmentSessionConfig(
         max_chunks=max_chunks,
         merge_embeddings=merge_embeddings,
-        store_chunks=True  # Store chunks for quality verification
+        store_chunks=True,
     )
-    
+
     # Create session
     session = create_enrollment_session(phone_number, config)
-    
+    logger.info(
+        "Enrollment session created | phone=%s session_id=%s max_chunks=%d",
+        phone_number,
+        session.session_id,
+        max_chunks,
+    )
+
     return EnrollmentSessionResponse(
         session_id=session.session_id,
         phone_number=session.phone_number,
@@ -124,68 +147,104 @@ async def add_audio_chunk_to_session(
     import soundfile as sf
     import numpy as np
     import io
-    
+
+    logger.info(
+        "add_audio_chunk_to_session() | session_id=%s filename=%s quality_score=%.2f",
+        session_id,
+        file.filename,
+        quality_score,
+    )
+
     # Validate file type
     if not file.filename.endswith(('.wav', '.WAV')):
+        logger.warning("Invalid file type | session_id=%s filename=%s", session_id, file.filename)
         raise HTTPException(
             status_code=400,
-            detail="Invalid file type. Please upload a WAV file."
+            detail="Invalid file type. Please upload a WAV file.",
         )
-    
+
     # Get session
     session = get_enrollment_session(session_id)
     if not session:
+        logger.warning("Session not found | session_id=%s", session_id)
         raise HTTPException(
             status_code=404,
-            detail=f"Session {session_id} not found"
+            detail=f"Session {session_id} not found",
         )
-    
+
     try:
         # Read audio file
         audio_bytes = await file.read()
-        
+        logger.debug(
+            "Audio file read | session_id=%s size=%d bytes", session_id, len(audio_bytes)
+        )
+
         if len(audio_bytes) < 1000:
+            logger.warning(
+                "Audio file too small | session_id=%s size=%d bytes", session_id, len(audio_bytes)
+            )
             raise HTTPException(
                 status_code=400,
-                detail="Audio file too small. Please record a longer sample."
+                detail="Audio file too small. Please record a longer sample.",
             )
-        
+
         # Load audio using soundfile
         audio_data, sample_rate = sf.read(io.BytesIO(audio_bytes))
-        
+
         # Convert to numpy array if needed
         if isinstance(audio_data, list):
             audio_data = np.array(audio_data)
-        
+
         # Ensure mono audio
         if len(audio_data.shape) > 1:
             audio_data = np.mean(audio_data, axis=1)
-        
+
         # Calculate duration
         duration_seconds = len(audio_data) / sample_rate
-        
-        # Validate quality score
         quality_score = max(0.0, min(1.0, quality_score))
-        
+
+        logger.info(
+            "Audio loaded | session_id=%s duration=%.3fs sample_rate=%d channels=%s quality=%.2f",
+            session_id,
+            duration_seconds,
+            sample_rate,
+            "mono" if len(audio_data.shape) == 1 else f"{audio_data.shape[1]}ch",
+            quality_score,
+        )
+
         # Add chunk to session
+        logger.debug("Adding chunk to enrollment session | session_id=%s", session_id)
         success, message, chunk = add_audio_chunk(
             session_id,
             audio_data,
             duration_seconds,
             sample_rate,
-            quality_score
+            quality_score,
         )
-        
+
         if not success:
-            raise HTTPException(
-                status_code=400,
-                detail=message
+            logger.warning(
+                "Failed to add chunk | session_id=%s reason=%s", session_id, message
             )
-        
+            raise HTTPException(status_code=400, detail=message)
+
         # If auto_process is enabled, generate embedding
         if session.config.auto_process and chunk:
+            logger.debug(
+                "Auto-processing chunk %d | session_id=%s",
+                len(session.chunks) - 1,
+                session_id,
+            )
             embedding = session.process_chunk(len(session.chunks) - 1)
-        
+
+        logger.info(
+            "Chunk added successfully | session_id=%s chunk=%d/%d has_embedding=%s",
+            session_id,
+            len(session.chunks),
+            session.config.max_chunks,
+            chunk.embedding is not None if chunk else False,
+        )
+
         chunk_response = AudioChunkResponse(
             chunk_id=chunk.chunk_id,
             chunk_number=len(session.chunks),
@@ -193,23 +252,26 @@ async def add_audio_chunk_to_session(
             duration_seconds=chunk.duration_seconds,
             timestamp=chunk.timestamp.isoformat(),
             has_embedding=chunk.embedding is not None,
-            quality_score=chunk.quality_score
+            quality_score=chunk.quality_score,
         ) if chunk else None
-        
+
         return EnrollmentChunkAddResponse(
             success=True,
             message=f"Chunk added ({len(session.chunks)}/{session.config.max_chunks})",
             chunk=chunk_response,
-            session_status=session.status.value
+            session_status=session.status.value,
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to process audio chunk: {str(e)}"
+        logger.error(
+            "Unexpected error adding chunk | session_id=%s error=%s",
+            session_id,
+            e,
+            exc_info=True,
         )
+        raise HTTPException(status_code=500, detail=f"Failed to process audio chunk: {str(e)}")
 
 
 @router.get("/enrollment/session/{session_id}", response_model=EnrollmentSessionResponse)
@@ -264,23 +326,45 @@ async def finalize_enrollment_session(session_id: str, force_single: bool = Fals
     """
     from app.services.enrollment import get_enrollment_session, finalize_enrollment
     from app.services.enrollment import get_confirmation_service
-    
+
+    logger.info(
+        "finalize_enrollment_session() | session_id=%s force_single=%s",
+        session_id,
+        force_single,
+    )
+
     session = get_enrollment_session(session_id)
     if not session:
+        logger.warning("Session not found for finalize | session_id=%s", session_id)
         raise HTTPException(
             status_code=404,
-            detail=f"Session {session_id} not found"
+            detail=f"Session {session_id} not found",
         )
-    
+
+    logger.info(
+        "Finalizing enrollment | session_id=%s phone=%s chunks=%d",
+        session_id,
+        session.phone_number,
+        len(session.chunks),
+    )
+
     try:
         success, message, vector_id = finalize_enrollment(session_id, force_single)
-        
+
         if not success:
-            raise HTTPException(
-                status_code=400,
-                detail=message
+            logger.warning(
+                "Enrollment finalization failed | session_id=%s reason=%s", session_id, message
             )
-        
+            raise HTTPException(status_code=400, detail=message)
+
+        logger.info(
+            "Enrollment finalized successfully | session_id=%s phone=%s vector_id=%s chunks=%d",
+            session_id,
+            session.phone_number,
+            vector_id,
+            len(session.chunks),
+        )
+
         # Send confirmation to registered client if available
         if vector_id:
             try:
@@ -290,33 +374,44 @@ async def finalize_enrollment_session(session_id: str, force_single: bool = Fals
                     vector_id=vector_id,
                     chunks_processed=len(session.chunks),
                     success=True,
-                    message=message
+                    message=message,
                 )
-                
                 if confirmation_sent:
-                    pass  # Log or handle confirmation sent
+                    logger.info(
+                        "Enrollment confirmation sent | session_id=%s confirmation_id=%s",
+                        session_id,
+                        confirmation_id,
+                    )
                 else:
-                    pass  # Log or handle no client registered
-                
+                    logger.debug(
+                        "No client registered for confirmation | session_id=%s", session_id
+                    )
             except Exception as e:
-                pass  # Don't fail the enrollment if confirmation fails
-        
+                logger.warning(
+                    "Confirmation send failed (non-fatal) | session_id=%s error=%s",
+                    session_id,
+                    e,
+                )
+
         return EnrollmentFinalizeResponse(
             success=True,
             message=message,
             phone_number=session.phone_number,
             vector_id=vector_id,
             chunks_processed=len(session.chunks),
-            enrollment_status=session.status.value
+            enrollment_status=session.status.value,
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to finalize enrollment: {str(e)}"
+        logger.error(
+            "Unexpected error finalizing enrollment | session_id=%s error=%s",
+            session_id,
+            e,
+            exc_info=True,
         )
+        raise HTTPException(status_code=500, detail=f"Failed to finalize enrollment: {str(e)}")
 
 
 @router.post("/enrollment/session/{session_id}/register-client")
