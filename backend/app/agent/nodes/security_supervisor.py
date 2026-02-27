@@ -1,20 +1,24 @@
 from __future__ import annotations
 
+import json
+
 from langchain_core.messages import SystemMessage
 from langgraph.types import Command
 
 from app.agent.state import AgentState
 
-_MUTATING_KEYWORDS = {"DELETE", "UPDATE", "DROP", "INSERT", "TRUNCATE", "ALTER"}
+# MongoDB operators that allow arbitrary code execution.
+_FORBIDDEN_OPERATORS = {"$where", "$function", "$accumulator"}
 
 
 async def security_supervisor(state: AgentState) -> Command:
-    """Validate the generated SQL before it reaches the database.
+    """Validate the generated MongoDB query JSON before it reaches the database.
 
-    Two checks are applied:
-    1. The verified user's phone number must appear verbatim in the SQL so
+    Three checks are applied:
+    1. The value must be valid JSON.
+    2. The ``filter.phone_number`` field must equal the verified user's phone so
        results are always scoped to the authenticated user.
-    2. The SQL must not contain any mutating / DDL keywords.
+    3. The JSON must not reference any code-execution operators.
 
     On failure the node retries up to 3 times by routing back to
     ``query_compiler`` with a corrective ``SECURITY ERROR`` message.
@@ -23,19 +27,29 @@ async def security_supervisor(state: AgentState) -> Command:
 
     On success the node routes to ``tool_executor``.
     """
-    sql = state.get("generated_sql", "")
+    raw = state.get("generated_sql", "")
     phone = state["user_phone"]
-    sql_upper = sql.upper()
 
-    # --- Check 1: phone number filter present ----------------------------------
-    if phone not in sql:
-        reason = f"SQL must contain a filter on phone_number = '{phone}'"
+    # --- Check 1: valid JSON ---------------------------------------------------
+    try:
+        query = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return _handle_failure(state, "Generated query is not valid JSON.")
+
+    # --- Check 2: phone_number filter present and correctly scoped -------------
+    filt = query.get("filter", {})
+    if filt.get("phone_number") != phone:
+        reason = (
+            f'filter.phone_number must equal "{phone}". '
+            "Always scope queries to the authenticated user."
+        )
         return _handle_failure(state, reason)
 
-    # --- Check 2: no mutating keywords -----------------------------------------
-    for keyword in _MUTATING_KEYWORDS:
-        if keyword in sql_upper:
-            reason = f"SQL contains forbidden keyword: {keyword}"
+    # --- Check 3: no forbidden operators ---------------------------------------
+    raw_lower = raw.lower()
+    for op in _FORBIDDEN_OPERATORS:
+        if op in raw_lower:
+            reason = f"Query contains forbidden operator: {op}"
             return _handle_failure(state, reason)
 
     # --- All checks passed -----------------------------------------------------

@@ -1,55 +1,55 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from datetime import datetime
+from decimal import Decimal
 
 from app.agent.state import AgentState
-from app.core.config import settings
+from app.db.connection import get_transactions_collection
 
 logger = logging.getLogger(__name__)
 
 
+def _json_default(obj: object) -> object:
+    """Serialise types not natively handled by json.dumps."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return str(obj)
+
+
+def _run_query(query_json: str) -> list[dict]:
+    """Run MongoDB query synchronously — called inside asyncio.to_thread."""
+    query = json.loads(query_json)
+    col = get_transactions_collection()
+
+    filter_ = query.get("filter", {})
+    sort_spec = query.get("sort", {"timestamp": -1})
+    limit = int(query.get("limit", 20))
+
+    # pymongo sort() expects a list of (field, direction) pairs.
+    sort_list = list(sort_spec.items())
+
+    cursor = col.find(filter_, {"_id": 0}).sort(sort_list).limit(limit)
+    return list(cursor)
+
+
 async def tool_executor(state: AgentState) -> dict:
-    """Execute *state['generated_sql']* via the MCP PostgreSQL tool.
+    """Execute the MongoDB query stored in *state['generated_sql']* and return
+    the results as a JSON string in ``{"sql_result": ...}``.
 
-    Opens a fresh MCP ``ClientSession`` for each invocation (stateless),
-    calls the ``"query"`` tool with the generated SQL, serialises the
-    result to a JSON string, and returns ``{"sql_result": json_string}``.
-
-    On any exception the error is logged at WARNING level and a JSON error
-    object is returned so ``response_shaper`` can apologise gracefully
-    without crashing the graph.
+    pymongo is synchronous, so the blocking call is offloaded to a thread via
+    ``asyncio.to_thread`` to avoid blocking the event loop.
     """
-    sql = state["generated_sql"]
+    query_json = state["generated_sql"]
 
     try:
-        server_params = StdioServerParameters(
-            command="npx",
-            args=["-y", "@modelcontextprotocol/server-postgres", settings.DATABASE_URL],
-        )
-
-        async with stdio_client(server_params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool("query", {"sql": sql})
-
-        # result.content is a list of TextContent / other content blocks.
-        # Normalise to a plain list of dicts / strings for the shaper.
-        rows: list = []
-        for block in result.content:
-            if hasattr(block, "text"):
-                try:
-                    rows.append(json.loads(block.text))
-                except json.JSONDecodeError:
-                    rows.append(block.text)
-            else:
-                rows.append(str(block))
-
-        return {"sql_result": json.dumps(rows)}
-
+        rows = await asyncio.to_thread(_run_query, query_json)
     except Exception as exc:
-        logger.warning("MCP tool_executor failed: %s", exc)
+        logger.exception("tool_executor: MongoDB query failed — %s", exc)
         return {"sql_result": json.dumps({"error": str(exc)})}
+
+    return {"sql_result": json.dumps(rows, default=_json_default)}

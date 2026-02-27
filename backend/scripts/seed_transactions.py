@@ -1,71 +1,33 @@
 """
-Seed the PostgreSQL transactions table with realistic dummy data.
+Seed the MongoDB transactions collection with realistic dummy data.
 
 Usage (from the backend/ directory):
     python -m scripts.seed_transactions
 
-The script is idempotent: running it multiple times will not insert
-duplicate rows because the table has a UNIQUE constraint on
-(phone_number, merchant, timestamp) and all inserts use ON CONFLICT DO NOTHING.
+The script is idempotent: a compound unique index on (phone_number, merchant,
+timestamp) ensures that re-running the script does not create duplicates.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-# ---------------------------------------------------------------------------
-# Resolve DATABASE_URL — try app settings first, fall back to env var.
-# ---------------------------------------------------------------------------
+try:
+    from pymongo import MongoClient, ASCENDING, DESCENDING
+    from pymongo.errors import DuplicateKeyError
+except ImportError:
+    print("ERROR: pymongo is not installed. Run: pip install pymongo", file=sys.stderr)
+    sys.exit(1)
+
 try:
     from app.core.config import settings
-    DATABASE_URL: str = settings.DATABASE_URL
+    MONGODB_URL: str = settings.MONGODB_URL
+    DATABASE_NAME: str = settings.DATABASE_NAME
 except Exception:
-    DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
-if not DATABASE_URL:
-    print(
-        "ERROR: DATABASE_URL is not configured. "
-        "Set it in .env or as an environment variable.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-
-try:
-    import psycopg2
-    import psycopg2.extras
-except ImportError:
-    print(
-        "ERROR: psycopg2 is not installed. Run: pip install psycopg2-binary",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-
-# ---------------------------------------------------------------------------
-# DDL
-# ---------------------------------------------------------------------------
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS transactions (
-    id           SERIAL PRIMARY KEY,
-    phone_number VARCHAR(20)     NOT NULL,
-    amount       NUMERIC(10, 2)  NOT NULL,
-    merchant     VARCHAR(100)    NOT NULL,
-    category     VARCHAR(50)     NOT NULL,
-    timestamp    TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    UNIQUE (phone_number, merchant, timestamp)
-);
-"""
-
-CREATE_INDEX_SQL = """
-CREATE INDEX IF NOT EXISTS idx_transactions_phone ON transactions (phone_number);
-"""
-
-INSERT_SQL = """
-INSERT INTO transactions (phone_number, amount, merchant, category, timestamp)
-VALUES (%s, %s, %s, %s, %s)
-ON CONFLICT DO NOTHING;
-"""
+    import os
+    MONGODB_URL = os.environ.get("MONGODB_URL", "mongodb://localhost:27017")
+    DATABASE_NAME = os.environ.get("DATABASE_NAME", "voice_biometric")
 
 # ---------------------------------------------------------------------------
 # Seed data — fixed timestamps so reruns are idempotent
@@ -131,42 +93,43 @@ SEED_DATA: list[tuple] = [
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    print(f"Connecting to database …")
-    conn = psycopg2.connect(DATABASE_URL)
-    conn.autocommit = False
+    print(f"Connecting to MongoDB at {MONGODB_URL} …")
+    client = MongoClient(MONGODB_URL)
+    db = client[DATABASE_NAME]
+    col = db["transactions"]
 
-    try:
-        with conn.cursor() as cur:
-            # Create table and index
-            cur.execute(CREATE_TABLE_SQL)
-            cur.execute(CREATE_INDEX_SQL)
-            conn.commit()
-            print("Table and index ensured.")
+    # Ensure compound unique index for idempotency.
+    col.create_index(
+        [("phone_number", ASCENDING), ("merchant", ASCENDING), ("timestamp", ASCENDING)],
+        unique=True,
+        name="uq_phone_merchant_ts",
+    )
+    col.create_index([("phone_number", ASCENDING), ("timestamp", DESCENDING)])
+    print("Indexes ensured.")
 
-            # Insert rows
-            inserted_by_phone: dict[str, int] = {}
+    inserted_by_phone: dict[str, int] = {}
 
-            for row in SEED_DATA:
-                phone = row[0]
-                cur.execute(INSERT_SQL, row)
-                rows_affected = cur.rowcount  # 1 if inserted, 0 on conflict
-                inserted_by_phone[phone] = inserted_by_phone.get(phone, 0) + rows_affected
+    for phone, amount, merchant, category, timestamp in SEED_DATA:
+        doc = {
+            "phone_number": phone,
+            "amount": float(amount),
+            "merchant": merchant,
+            "category": category,
+            "timestamp": timestamp,
+        }
+        try:
+            col.insert_one(doc)
+            inserted_by_phone[phone] = inserted_by_phone.get(phone, 0) + 1
+        except DuplicateKeyError:
+            pass  # already seeded
 
-            conn.commit()
+    client.close()
 
-        # Summary
-        print("\nSeed summary (rows newly inserted):")
-        for phone, count in sorted(inserted_by_phone.items()):
-            print(f"  {phone}: {count} row(s)")
-        total = sum(inserted_by_phone.values())
-        print(f"\nTotal rows inserted: {total} / {len(SEED_DATA)}")
-
-    except Exception as exc:
-        conn.rollback()
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
-    finally:
-        conn.close()
+    print("\nSeed summary (rows newly inserted):")
+    for phone, count in sorted(inserted_by_phone.items()):
+        print(f"  {phone}: {count} row(s)")
+    total = sum(inserted_by_phone.values())
+    print(f"\nTotal rows inserted: {total} / {len(SEED_DATA)}")
 
 
 if __name__ == "__main__":

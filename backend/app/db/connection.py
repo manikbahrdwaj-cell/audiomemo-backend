@@ -108,3 +108,24 @@ def get_db_instance():
     if _db is None:
         get_database()  # Initialize connection and set _db
     return _db
+
+
+_transactions_collection = None
+
+
+def get_transactions_collection():
+    """Get the transactions collection, creating indexes on first call."""
+    global _transactions_collection
+
+    if _transactions_collection is None:
+        db = get_db_instance()
+        _transactions_collection = db["transactions"]
+
+        # Ensure indexes for common query patterns.
+        _transactions_collection.create_index("phone_number")
+        _transactions_collection.create_index("timestamp")
+        _transactions_collection.create_index([("phone_number", 1), ("timestamp", -1)])
+
+        logging.info("Transactions collection initialized")
+
+    return _transactions_collection

@@ -8,7 +8,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-PROMPT_NOT_VERIFIED = "Please speak a little more so I can verify your identity."
+PROMPT_NOT_VERIFIED = "Please speak a little more so I can verify you."
 PROMPT_ASK_AGAIN = "I didn't catch a clear question. Could you please ask again?"
 
 

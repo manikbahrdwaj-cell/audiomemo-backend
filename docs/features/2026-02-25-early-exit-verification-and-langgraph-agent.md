@@ -326,7 +326,7 @@ VAD_SILENCE_DURATION_MS=1500     # silence ms to trigger utterance_complete
   "layer": "ml",
   "file": "backend/app/agent/tts.py",
   "function_or_class": "synthesise_speech",
-  "description": "Create backend/app/agent/tts.py. Define async function synthesise_speech(text: str, voice: str = 'alloy') -> bytes. Instantiate AsyncOpenAI(api_key=settings.OPENAI_API_KEY). Call client.audio.speech.create(model='tts-1', voice=voice, input=text, response_format='mp3'). Read with await response.aread(). Return raw mp3 bytes. On exception, log and return b''. Also define two module-level constants: PROMPT_NOT_VERIFIED = 'Please speak a little more so I can verify your identity.' and PROMPT_ASK_AGAIN = \"I didn't catch a clear question. Could you please ask again?\"",
+  "description": "Create backend/app/agent/tts.py. Define async function synthesise_speech(text: str, voice: str = 'alloy') -> bytes. Instantiate AsyncOpenAI(api_key=settings.OPENAI_API_KEY). Call client.audio.speech.create(model='tts-1', voice=voice, input=text, response_format='mp3'). Read with await response.aread(). Return raw mp3 bytes. On exception, log and return b''. Also define two module-level constants: PROMPT_NOT_VERIFIED = 'Please speak a little more so I can verify you.' and PROMPT_ASK_AGAIN = \"I didn't catch a clear question. Could you please ask again?\"",
   "depends_on": ["T01", "T04"],
   "context_files": [
     "backend/app/core/config.py"
