@@ -12,8 +12,12 @@ class AgentState(TypedDict):
     # LangGraph append reducer — new messages are appended, not overwritten.
     messages: Annotated[list[BaseMessage], add_messages]
 
-    # Verified phone number from the session cache.
+    # Verified phone number (display/logging only).
     user_phone: str
+
+    # str(_id) of the voice_embeddings document — canonical user identifier
+    # used to scope all transaction queries.
+    user_id: str
 
     # Whisper transcription of the current user query.
     utterance: str

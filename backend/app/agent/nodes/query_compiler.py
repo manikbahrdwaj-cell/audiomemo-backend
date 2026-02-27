@@ -6,37 +6,73 @@ from typing import Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+import logging
+
 from app.agent.state import AgentState
 
+logger = logging.getLogger(__name__)
+
 _SYSTEM_TEMPLATE = """\
-You are a MongoDB query generator for a transactions collection.
+You are a MongoDB query generator. Translate the user's natural-language question
+into a valid JSON query against the "transactions" collection.
 
-Collection: transactions
-Document schema:
-  {{
-    "phone_number": "<string>",
-    "amount":       <number>,
-    "merchant":     "<string>",
-    "category":     "<string>"   // e.g. Grocery, Coffee, Fuel, Online Retail, Restaurant
-    "timestamp":    <ISODate>
-  }}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COLLECTION: transactions
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Field        Type      Notes
+-----------  --------  -----------------------------------------
+user_id      string    Authenticated user ID — ALWAYS filter by this
+amount       number    Transaction amount in USD (e.g. 52.3)
+merchant     string    Store / vendor name (e.g. "Whole Foods Market")
+category     string    Exactly one of: "Grocery", "Coffee", "Fuel",
+                       "Online Retail", "Restaurant"
+timestamp    ISODate   UTC datetime stored as Python datetime object;
+                       compare with ISO 8601 strings using $gte / $lte
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Rules:
-- You MUST include "phone_number": "{phone_number}" inside the "filter" object.
-- Only use read operators ($gt, $lt, $gte, $lte, $in, $regex, $and, $or).
-- Do NOT use $where, $function, or $accumulator.
-- Return ONLY valid JSON matching the schema below, optionally wrapped in ```json ... ``` fences:
+HARD RULES:
+1. The "filter" object MUST always contain exactly: "user_id": "{user_id}"
+2. Use only these read operators: $gt $lt $gte $lte $in $regex $and $or $not
+3. NEVER use: $where  $function  $accumulator  $expr  or any write operators
+4. Return ONLY a JSON object (optionally inside ```json … ``` fences):
+     {{"filter": {{...}}, "sort": {{...}}, "limit": <int>}}
+5. "sort" defaults to {{"timestamp": -1}} (newest first).
+6. "limit" defaults to 10. Use a smaller number when the user asks for "last N".
 
-  {{"filter": {{...}}, "sort": {{"timestamp": -1}}, "limit": <int>}}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUERY EXAMPLES (user_id omitted for brevity):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-- "sort" defaults to {{"timestamp": -1}} if not relevant to the question.
-- "limit" defaults to 10.
-- If the question cannot be answered with this schema use:
-  {{"filter": {{"phone_number": "{phone_number}"}}, "sort": {{"timestamp": -1}}, "limit": 10}}
+"Show my last 3 transactions"
+  → {{"filter": {{"user_id": "{user_id}"}}, "sort": {{"timestamp": -1}}, "limit": 3}}
+
+"What did I spend on coffee?"
+  → {{"filter": {{"user_id": "{user_id}", "category": "Coffee"}}, "sort": {{"timestamp": -1}}, "limit": 10}}
+
+"Transactions above $100"
+  → {{"filter": {{"user_id": "{user_id}", "amount": {{"$gt": 100}}}}, "sort": {{"timestamp": -1}}, "limit": 10}}
+
+"Grocery and restaurant spending"
+  → {{"filter": {{"user_id": "{user_id}", "category": {{"$in": ["Grocery", "Restaurant"]}}}}, "sort": {{"timestamp": -1}}, "limit": 10}}
+
+"Spending at Amazon"
+  → {{"filter": {{"user_id": "{user_id}", "merchant": {{"$regex": "Amazon", "$options": "i"}}}}, "sort": {{"timestamp": -1}}, "limit": 10}}
+
+"Transactions this month (February 2026)"
+  → {{"filter": {{"user_id": "{user_id}", "timestamp": {{"$gte": "2026-02-01T00:00:00", "$lt": "2026-03-01T00:00:00"}}}}, "sort": {{"timestamp": -1}}, "limit": 10}}
+
+"Largest purchase"
+  → {{"filter": {{"user_id": "{user_id}"}}, "sort": {{"amount": -1}}, "limit": 1}}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+If the question cannot be answered from this schema,
+fall back to the default query (all recent transactions):
+  {{"filter": {{"user_id": "{user_id}"}}, "sort": {{"timestamp": -1}}, "limit": 10}}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 _DEFAULT_QUERY_TEMPLATE = (
-    '{{"filter": {{"phone_number": "{phone_number}"}}, '
+    '{{"filter": {{"user_id": "{user_id}"}}, '
     '"sort": {{"timestamp": -1}}, "limit": 10}}'
 )
 
@@ -68,7 +104,8 @@ def build_query_compiler_node(llm) -> Callable[[AgentState], dict]:
 
     async def node(state: AgentState) -> dict:
         phone = state["user_phone"]
-        system_prompt = _SYSTEM_TEMPLATE.format(phone_number=phone)
+        user_id = state["user_id"]
+        system_prompt = _SYSTEM_TEMPLATE.format(user_id=user_id)
 
         # --- Build user message -------------------------------------------------
         user_parts: list[str] = []
@@ -98,14 +135,18 @@ def build_query_compiler_node(llm) -> Callable[[AgentState], dict]:
         messages.append(HumanMessage(content=user_message_text))
 
         # --- Invoke LLM ---------------------------------------------------------
+        logger.info("[QueryCompiler] Compiling query | phone=%s user_id=%s utterance=%r", phone, user_id, state["utterance"])
         response = await llm.ainvoke(messages)
+        logger.debug("[QueryCompiler] Raw LLM output: %s", response.content)
         query_json = _extract_json(response.content)
 
         # Validate it is parseable JSON; fall back to default on failure.
         try:
             json.loads(query_json)
+            logger.info("[QueryCompiler] Generated query: %s", query_json)
         except (json.JSONDecodeError, ValueError):
-            query_json = _DEFAULT_QUERY_TEMPLATE.format(phone_number=phone)
+            logger.warning("[QueryCompiler] JSON parse failed — using default query")
+            query_json = _DEFAULT_QUERY_TEMPLATE.format(user_id=user_id)
 
         return {"generated_sql": query_json}
 

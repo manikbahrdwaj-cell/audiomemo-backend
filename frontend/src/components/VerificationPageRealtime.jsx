@@ -18,9 +18,6 @@ import {
   Tooltip,
   ResponsiveContainer,
   Cell,
-  LineChart,
-  Line,
-  Legend,
 } from 'recharts';
 import AudioChunkingService from '../services/audioChunkingService';
 import { useRealtimeVerification } from '../hooks/useRealtimeVerification';
@@ -64,6 +61,7 @@ function VerificationPageRealtime() {
       }
       verification.disconnect();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Stop recording when verification complete
@@ -79,6 +77,8 @@ function VerificationPageRealtime() {
       setRecordingTime(0);
       setIsAgentMode(true);
       if (timerRef.current) clearInterval(timerRef.current);
+      // Switch to 100ms streaming chunks for seamless voice-agent conversation
+      chunkingServiceRef.current.setMode('agent');
       // Restart microphone recording for the voice agent after a short pause.
       setTimeout(() => handleStartRecordingCore(), 800);
     } else {
@@ -86,6 +86,7 @@ function VerificationPageRealtime() {
       console.log('[VerificationPageRealtime] Stopping recording - verification failed');
       handleStopRecording();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [verification.isComplete]);
 
   // Auto-play agent audio when a new assistant message arrives
@@ -101,6 +102,7 @@ function VerificationPageRealtime() {
       agentAudioRef.current = audio;
       audio.play().catch((e) => console.warn('[Agent] Auto-play blocked:', e));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [verification.agentMessages.length]);
 
   // Auto-start recording once WebSocket session is ready
@@ -143,22 +145,6 @@ function VerificationPageRealtime() {
 
   const handleThresholdChange = (e) => {
     setThreshold(parseFloat(e.target.value));
-  };
-
-  const handleStartVerification = async () => {
-    if (!phoneNumber.trim()) {
-      alert('Please enter a phone number');
-      return;
-    }
-
-    try {
-      console.log('[VerificationPageRealtime] Starting verification for:', phoneNumber);
-      await verification.connectForVerification(phoneNumber.trim(), threshold);
-      console.log('[VerificationPageRealtime] Verification connection established');
-    } catch (err) {
-      console.error('[VerificationPageRealtime] Failed to start verification:', err);
-      alert(err.message || 'Failed to start verification');
-    }
   };
 
   // Core recording start logic (no isReady guard — called after session confirmed ready)
@@ -210,14 +196,6 @@ function VerificationPageRealtime() {
     }
   };
 
-  const handleStartRecording = async () => {
-    if (!verification.isReady) {
-      alert('Please initiate call first');
-      return;
-    }
-    await handleStartRecordingCore();
-  };
-
   const handleStopRecording = () => {
     console.log('[VerificationPageRealtime] Stopping recording');
     if (chunkingServiceRef.current) {
@@ -232,14 +210,6 @@ function VerificationPageRealtime() {
       agentAudioRef.current = null;
     }
     // Disconnect the WebSocket and return to the idle form.
-    verification.disconnect();
-  };
-
-  const handleCancelVerification = () => {
-    console.log('[VerificationPageRealtime] Cancelling verification');
-    if (isRecording) {
-      handleStopRecording();
-    }
     verification.disconnect();
   };
 

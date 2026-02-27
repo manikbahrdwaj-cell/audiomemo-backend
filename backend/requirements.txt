@@ -4,7 +4,8 @@ uvicorn[standard]==0.24.0
 websockets==12.0
 python-multipart==0.0.6
 pymongo==4.6.0
-numpy==1.26.4 
+numpy==1.26.4
+soundfile>=0.12
 torch==2.2.0
 torchaudio==2.2.0
 speechbrain==0.5.16

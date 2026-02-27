@@ -17,6 +17,7 @@ from app.ml.embedding import generate_embedding, calculate_cosine_similarity
 from app.db.embeddings import get_voice_embedding
 from app.db.verified_sessions import save_verified_session
 from app.agent.session_cache import set_verified as agent_set_verified
+from app.db.embeddings import get_user_id_for_phone
 
 logger = logging.getLogger(__name__)
 
@@ -480,13 +481,22 @@ class RealtimeVerificationManager:
             if session.final_status == "verified":
                 cache_key = session.client_id or session.session_id
                 try:
+                    user_id = get_user_id_for_phone(session.phone_number)
+                    if user_id is None:
+                        # No embedding doc found — fall back so agent still runs.
+                        logger.warning(
+                            "No embedding _id found for phone=%s; using phone as user_id",
+                            session.phone_number,
+                        )
+                        user_id = session.phone_number
                     agent_set_verified(
                         client_id=cache_key,
                         phone_number=session.phone_number,
+                        user_id=user_id,
                     )
                     logger.info(
                         f"AgentSessionCache populated for client {cache_key[:8]} "
-                        f"(phone={session.phone_number})"
+                        f"(phone={session.phone_number}, user_id={user_id})"
                     )
                 except Exception as cache_err:
                     logger.warning(f"Failed to write AgentSessionCache: {cache_err}")

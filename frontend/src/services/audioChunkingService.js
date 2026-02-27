@@ -11,8 +11,10 @@ export const AUDIO_CONFIG = {
   SAMPLE_RATE: 16000,
   ENROLLMENT_CHUNK_DURATION_MS: 1000,     // 1 second
   VERIFICATION_CHUNK_DURATION_MS: 5000,   // 5 seconds
+  AGENT_CHUNK_DURATION_MS: 100,           // 100ms — for seamless voice-agent streaming
   ENROLLMENT_CHUNK_SAMPLES: 16000,        // 1 second at 16kHz
   VERIFICATION_CHUNK_SAMPLES: 80000,      // 5 seconds at 16kHz
+  AGENT_CHUNK_SAMPLES: 1600,              // 100ms at 16kHz
   BUFFER_SIZE: 4096,                      // Processing buffer size
 };
 
@@ -122,8 +124,11 @@ class AudioChunkingService {
     } else if (mode === 'verification') {
       this.chunkSize = AUDIO_CONFIG.VERIFICATION_CHUNK_SAMPLES;
       this.mode = 'verification';
+    } else if (mode === 'agent') {
+      this.chunkSize = AUDIO_CONFIG.AGENT_CHUNK_SAMPLES;
+      this.mode = 'agent';
     } else {
-      throw new Error(`Invalid mode: ${mode}. Must be 'enrollment' or 'verification'`);
+      throw new Error(`Invalid mode: ${mode}. Must be 'enrollment', 'verification', or 'agent'`);
     }
   }
 

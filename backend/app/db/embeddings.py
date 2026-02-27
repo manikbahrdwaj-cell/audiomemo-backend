@@ -110,6 +110,25 @@ def get_voice_embedding(phone_number: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def get_user_id_for_phone(phone_number: str) -> Optional[str]:
+    """Return the str(_id) of the voice_embeddings document for *phone_number*.
+
+    This is the canonical user identifier stored as ``user_id`` in the
+    transactions collection instead of a raw phone-number string.
+
+    Returns:
+        Hex-string ObjectId, or ``None`` if the phone is not enrolled.
+    """
+    collection = get_database()
+    doc = collection.find_one({"phone_number": phone_number}, {"_id": 1})
+    if doc is None:
+        logger.warning("get_user_id_for_phone: no embedding found for phone=%s", phone_number)
+        return None
+    user_id = str(doc["_id"])
+    logger.debug("get_user_id_for_phone | phone=%s user_id=%s", phone_number, user_id)
+    return user_id
+
+
 def check_enrollment(phone_number: str) -> bool:
     """
     Check if a phone number is enrolled

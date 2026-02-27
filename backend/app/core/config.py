@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # Voice Activity Detection settings
     VAD_SILENCE_THRESHOLD_RMS: float = 0.01
-    VAD_SILENCE_DURATION_MS: int = 1500
+    VAD_SILENCE_DURATION_MS: int = 2000
 
     class Config:
         env_file = ".env"

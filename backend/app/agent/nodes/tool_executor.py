@@ -45,11 +45,15 @@ async def tool_executor(state: AgentState) -> dict:
     ``asyncio.to_thread`` to avoid blocking the event loop.
     """
     query_json = state["generated_sql"]
+    logger.info("[ToolExecutor] Running MongoDB query: %s", query_json)
 
     try:
         rows = await asyncio.to_thread(_run_query, query_json)
     except Exception as exc:
-        logger.exception("tool_executor: MongoDB query failed — %s", exc)
+        logger.exception("[ToolExecutor] MongoDB query failed — %s", exc)
         return {"sql_result": json.dumps({"error": str(exc)})}
 
+    logger.info("[ToolExecutor] Query returned %d row(s)", len(rows))
+    if rows:
+        logger.debug("[ToolExecutor] First row sample: %s", json.dumps(rows[0], default=_json_default))
     return {"sql_result": json.dumps(rows, default=_json_default)}

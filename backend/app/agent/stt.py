@@ -22,12 +22,15 @@ async def transcribe_audio(audio_bytes: bytes, language: str = "en") -> str:
     """
     try:
         client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        logger.info("[STT] Sending %d bytes to Whisper", len(audio_bytes))
         response = await client.audio.transcriptions.create(
             model="whisper-1",
             file=("audio.wav", io.BytesIO(audio_bytes), "audio/wav"),
             language=language,
         )
-        return response.text
+        text = response.text
+        logger.info("[STT] ← Heard: %r  (%d words)", text, len(text.split()))
+        return text
     except Exception as exc:
-        logger.warning("Whisper STT failed: %s", exc)
+        logger.warning("[STT] Whisper STT failed: %s", exc)
         return ""
