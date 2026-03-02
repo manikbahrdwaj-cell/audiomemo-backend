@@ -257,13 +257,6 @@ class RealtimeVerificationManager:
                 )
                 session.chunk_results.append(result)
                 
-                # Log this chunk's result (no early return - always continue)
-                chunk_status = "✓ PASS" if result.is_match else "✗ FAIL"
-                logger.info(
-                    f"Chunk {session.chunks_processed}/{session.max_chunks} {chunk_status} - "
-                    f"Similarity: {similarity_score:.4f} (Threshold: {session.threshold:.2f})"
-                )
-                
                 # Clear buffer for next 5-second accumulation
                 session.audio_buffer = []
                 session.buffer_duration_seconds = 0.0
@@ -279,67 +272,20 @@ class RealtimeVerificationManager:
                     "final_status": None
                 }
                 
-                # REFACTORED: Process ALL chunks before deciding final result
-                # No early return - continue processing until max_chunks reached
-                if session.chunks_processed >= session.max_chunks:
-                    # All chunks have been processed - now evaluate final result
-                    all_chunks_matched = all(result.is_match for result in session.chunk_results)
-                    
-                    # Log all chunk results for debugging
-                    logger.info(
-                        f"\n{'='*70}"
-                    )
-                    logger.info(f"Session {session_id[:8]} - Final Verification Report")
-                    logger.info(f"{'='*70}")
-                    logger.info(f"Total Chunks Processed: {session.chunks_processed}/{session.max_chunks}")
-                    logger.info(f"Threshold: {session.threshold:.2f}")
-                    logger.info(f"\nIndividual Chunk Results:")
-                    
-                    # Log each chunk's pass/fail status
-                    for i, chunk_result in enumerate(session.chunk_results, 1):
-                        status_symbol = "✓" if chunk_result.is_match else "✗"
-                        chunk_status_text = "PASS" if chunk_result.is_match else "FAIL"
-                        logger.info(
-                            f"  {status_symbol} Chunk {i}: {chunk_status_text} "
-                            f"(Score: {chunk_result.similarity_score:.4f})"
-                        )
-                    
-                    # Determine final verification result
-                    if all_chunks_matched:
-                        session.final_status = "verified"
-                        session.verified_at_chunk = session.chunks_processed
-                        session.status = StreamingVerificationStatus.VERIFIED
-                        response["final_status"] = "verified"
-                        
-                        logger.info(
-                            f"\n✓ VERIFICATION SUCCESSFUL - All {session.chunks_processed} chunks matched!"
-                        )
-                        logger.info(
-                            f"  Average Similarity: "
-                            f"{np.mean([r.similarity_score for r in session.chunk_results]):.4f}"
-                        )
-                    else:
-                        session.final_status = "unverified"
-                        session.verified_at_chunk = None
-                        session.status = StreamingVerificationStatus.UNVERIFIED
-                        response["final_status"] = "unverified"
-                        
-                        # Count how many chunks failed
-                        failed_count = sum(1 for r in session.chunk_results if not r.is_match)
-                        logger.info(
-                            f"\n✗ VERIFICATION FAILED - {failed_count}/{session.chunks_processed} chunk(s) did not match"
-                        )
-                        logger.info(
-                            f"  Minimum Similarity: "
-                            f"{min(r.similarity_score for r in session.chunk_results):.4f}"
-                        )
-                    
-                    logger.info(f"{'='*70}\n")
-                    
-                    # Save to database
+                # Early exit: first matching chunk triggers immediate verification
+                if result.is_match:
+                    session.final_status = "verified"
+                    session.verified_at_chunk = session.chunks_processed
+                    session.status = StreamingVerificationStatus.VERIFIED
+                    response["final_status"] = "verified"
+                    self._save_session_to_database(session)
+                elif session.chunks_processed >= session.max_chunks:
+                    session.final_status = "unverified"
+                    session.verified_at_chunk = None
+                    session.status = StreamingVerificationStatus.UNVERIFIED
+                    response["final_status"] = "unverified"
                     self._save_session_to_database(session)
                 else:
-                    # More chunks still needed, continue recording
                     session.status = StreamingVerificationStatus.RECORDING
                 
                 return response
