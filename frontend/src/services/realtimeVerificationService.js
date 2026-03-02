@@ -12,7 +12,6 @@ export const REALTIME_VERIFICATION_EVENTS = {
   UNVERIFIED: 'realtimeVerification:unverified',
   ERROR: 'realtimeVerification:error',
   CONNECTION_CLOSED: 'realtimeVerification:connection_closed',
-  GREETING_AUDIO: 'realtimeVerification:greeting_audio',
   AGENT_RESPONSE: 'realtimeVerification:agent_response',
   AGENT_THINKING: 'realtimeVerification:agent_thinking',
 };
@@ -65,11 +64,10 @@ class RealtimeVerificationService extends EventEmitter {
 
         this.ws.onopen = () => {
           console.log(`[RealTimeVerification] Connected for phone: ${phoneNumber}`);
-          this.status = REALTIME_VERIFICATION_STATUS.READY;
-          this.emit(REALTIME_VERIFICATION_EVENTS.SESSION_CREATED, {
-            phoneNumber,
-            threshold,
-          });
+          // Do NOT set isReady or emit SESSION_CREATED here.
+          // Wait for the backend to send the "session_created" JSON message —
+          // it may instead send an "error" (e.g. phone not enrolled) and close.
+          // SESSION_CREATED is emitted by _handleMessage when that message arrives.
           resolve(true);
         };
 
@@ -112,14 +110,19 @@ class RealtimeVerificationService extends EventEmitter {
             this.status === REALTIME_VERIFICATION_STATUS.UNVERIFIED;
 
           if (!wasCompleted) {
-            // Unexpected close mid-session — surface it as an error
-            const reason = event.reason || `WebSocket closed (code ${event.code})`;
-            this.status = REALTIME_VERIFICATION_STATUS.ERROR;
-            this.verificationError = reason;
-            this.emit(REALTIME_VERIFICATION_EVENTS.ERROR, {
-              error: 'connection_closed',
-              message: 'Connection lost unexpectedly. Please try again.',
-            });
+            // Unexpected close mid-session — surface it as an error.
+            // Note: "not enrolled" is communicated via a JSON error message
+            // BEFORE close, so it is already handled by _handleMessage.
+            // Only emit a fallback error here if no error was already set.
+            if (!this.verificationError) {
+              const reason = event.reason || `WebSocket closed (code ${event.code})`;
+              this.status = REALTIME_VERIFICATION_STATUS.ERROR;
+              this.verificationError = reason;
+              this.emit(REALTIME_VERIFICATION_EVENTS.ERROR, {
+                error: 'connection_closed',
+                message: 'Connection lost unexpectedly. Please try again.',
+              });
+            }
           }
 
           this.emit(REALTIME_VERIFICATION_EVENTS.CONNECTION_CLOSED, {
@@ -233,6 +236,7 @@ class RealtimeVerificationService extends EventEmitter {
       this.sessionId = message.session_id;
       this.maxChunks = message.max_chunks || 4;
       this.threshold = message.threshold || this.threshold;
+      this.status = REALTIME_VERIFICATION_STATUS.READY;
       console.log(`[RealTimeVerification] Session ready. Max chunks: ${this.maxChunks}, Threshold: ${this.threshold}`);
       this.emit(REALTIME_VERIFICATION_EVENTS.SESSION_CREATED, {
         sessionId: this.sessionId,
@@ -292,11 +296,6 @@ class RealtimeVerificationService extends EventEmitter {
       this.emit(REALTIME_VERIFICATION_EVENTS.ERROR, {
         error: message.error,
         message: message.message,
-      });
-    } else if (type === 'greeting_audio') {
-      this.emit(REALTIME_VERIFICATION_EVENTS.GREETING_AUDIO, {
-        audioBase64: message.data || '',
-        text: message.text || '',
       });
     } else if (type === 'agent_audio') {
       this.emit(REALTIME_VERIFICATION_EVENTS.AGENT_RESPONSE, {

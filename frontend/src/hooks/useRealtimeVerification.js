@@ -125,7 +125,8 @@ export function useRealtimeVerification() {
       console.error('[useRealtimeVerification] Connection failed:', err);
       setStatus(REALTIME_VERIFICATION_STATUS.ERROR);
       setError(err.message || 'Failed to connect for verification');
-      setIsVerified(false);
+      // Do NOT set isVerified(false) here — that would make isComplete=true
+      // and render the "NOT VERIFIED" panel instead of the error on the form.
       throw err;
     }
   }, []);

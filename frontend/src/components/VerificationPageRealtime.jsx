@@ -158,6 +158,16 @@ function VerificationPageRealtime() {
     }
   }, [verification.isReady]);
 
+  // Reset connecting state if an error arrives before the session is ready
+  // (e.g. phone not enrolled — backend sends error then closes the socket).
+  useEffect(() => {
+    if (verification.error && isConnecting) {
+      setIsConnecting(false);
+      pendingStartRecordingRef.current = false;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verification.error]);
+
   const handleChunkReady = async (chunkInfo) => {
     console.log('[VerificationPageRealtime] Chunk ready:', chunkInfo.chunkNumber);
 
