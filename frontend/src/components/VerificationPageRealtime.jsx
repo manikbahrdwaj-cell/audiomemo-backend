@@ -31,6 +31,7 @@ function VerificationPageRealtime() {
   const [threshold, setThreshold] = useState(0.75);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isAgentMode, setIsAgentMode] = useState(false);
+  const [callDisconnected, setCallDisconnected] = useState(false);
 
   // References
   const timerRef = useRef(null);
@@ -183,11 +184,15 @@ function VerificationPageRealtime() {
       // If the WebSocket closed while we were recording, stop immediately
       // so we don't keep trying to send chunks into a dead connection.
       if (error.message === 'WebSocket not connected') {
-        console.warn('[VerificationPageRealtime] WebSocket lost — stopping recording');
-        if (chunkingServiceRef.current) chunkingServiceRef.current.stopRecording();
-        setIsRecording(false);
-        setRecordingTime(0);
-        if (timerRef.current) clearInterval(timerRef.current);
+        // Only surface the error when the user didn't intentionally end the call.
+        // isRecording is already false when handleStopRecording was called first.
+        if (isRecording) {
+          console.warn('[VerificationPageRealtime] WebSocket lost unexpectedly — stopping recording');
+          if (chunkingServiceRef.current) chunkingServiceRef.current.stopRecording();
+          setIsRecording(false);
+          setRecordingTime(0);
+          if (timerRef.current) clearInterval(timerRef.current);
+        }
       }
     }
   };
@@ -258,6 +263,7 @@ function VerificationPageRealtime() {
     setIsRecording(false);
     setRecordingTime(0);
     setIsAgentMode(false);
+    setCallDisconnected(true);
     if (timerRef.current) clearInterval(timerRef.current);
     if (agentAudioRef.current) {
       agentAudioRef.current.pause();
@@ -269,6 +275,7 @@ function VerificationPageRealtime() {
 
   const handleNewAttempt = () => {
     console.log('[VerificationPageRealtime] Starting new attempt');
+    setCallDisconnected(false);
     verification.disconnect();
   };
 
@@ -315,7 +322,7 @@ function VerificationPageRealtime() {
       <h1 className="text-3xl font-bold mb-6 text-gray-800">Voice Verification</h1>
 
       {/* Setup + Initiate Call — visible until connected */}
-      {!verification.isReady && !verification.isComplete && (
+      {!verification.isReady && !verification.isComplete && !callDisconnected && (
         <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
           <h2 className="text-lg font-semibold mb-4 text-gray-800">Voice Verification</h2>
 
@@ -615,6 +622,23 @@ function VerificationPageRealtime() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Call Disconnected Banner */}
+      {callDisconnected && (
+        <div className="mb-6 p-6 rounded-lg border bg-green-50 border-green-200 text-center">
+          <div className="flex items-center justify-center gap-3 mb-4">
+            <span className="text-3xl">✅</span>
+            <h2 className="text-2xl font-bold text-green-700">Call Disconnected</h2>
+          </div>
+          <p className="text-sm text-gray-600 mb-4">Your call has been ended successfully.</p>
+          <button
+            onClick={handleNewAttempt}
+            className="w-full px-6 py-3 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 transition"
+          >
+            📞 New Call
+          </button>
         </div>
       )}
 

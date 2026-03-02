@@ -152,8 +152,12 @@ export function useRealtimeVerification() {
 
       await service.sendAudioChunk(audioBlob);
     } catch (err) {
-      console.error('[useRealtimeVerification] Error submitting chunk:', err);
-      setError(err.message || 'Failed to submit audio chunk');
+      // 'WebSocket not connected' is expected when the user ends the call while
+      // a chunk is in-flight — don't surface it as a visible error.
+      if (err.message !== 'WebSocket not connected') {
+        console.error('[useRealtimeVerification] Error submitting chunk:', err);
+        setError(err.message || 'Failed to submit audio chunk');
+      }
       throw err;
     }
   }, []);
