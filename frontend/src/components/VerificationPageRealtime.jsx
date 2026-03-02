@@ -344,8 +344,8 @@ function VerificationPageRealtime() {
         <div className="mb-6 p-4 bg-green-50 rounded-lg border border-green-200">
           <h2 className="text-lg font-semibold mb-4 text-gray-800">Recording & Verification</h2>
 
-          {/* Status Bar — hidden in agent mode */}
-          {!isAgentMode && (
+          {/* Status Bar — COMMENTED OUT (UI hidden; logic intact) */}
+          {false && !isAgentMode && (
           <div className="mb-6 p-4 bg-white rounded-lg border border-green-200">
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm font-medium text-gray-700">Status</span>
@@ -412,8 +412,8 @@ function VerificationPageRealtime() {
 
           </div>
 
-          {/* Chunk Results List with Live Chart — hidden in agent mode */}
-          {!isAgentMode && verification.chunkResults.length > 0 && (
+          {/* Chunk Results List with Live Chart — COMMENTED OUT (UI hidden; logic intact) */}
+          {false && !isAgentMode && verification.chunkResults.length > 0 && (
             <div className="mb-6">
               <h3 className="font-medium text-gray-700 mb-3">Chunk Results</h3>
               
