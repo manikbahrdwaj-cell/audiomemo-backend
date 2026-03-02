@@ -42,15 +42,47 @@ Reply with EXACTLY one word — no punctuation, no explanation:
   off_topic    — anything else (greetings, general knowledge, weather, jokes,
                  personal questions not related to transactions, etc.)
 
+A message is data_query whenever the user (I / me / my) asks about:
+  • how much they spent / how many dollars they spent / total spending
+  • where they spent money, which merchant, which store
+  • what categories they bought in
+  • transaction history, purchases, bills, charges, payments
+  • any specific amount from their own history
+
+A message is off_topic when it:
+  • asks about other people's spending ("we", "everyone", "all of us")
+  • is a greeting, chitchat, joke, or general knowledge question
+  • asks about future budgets or hypotheticals ("how much should I spend")
+  • is about profits, investments, revenue — not personal transactions
+  • makes a statement rather than asking about transaction data
+
 Examples:
-  "What did I spend last month?"          → data_query
-  "Show me my coffee purchases"           → data_query
-  "What is my biggest purchase?"          → data_query
-  "How are you?"                          → off_topic
-  "Tell me a joke"                        → off_topic
-  "What is the capital of France?"        → off_topic
-  "Hi, I just found now, might be you find" → off_topic
-  "Do you know me?"                       → off_topic
+  "What did I spend last month?"              → data_query
+  "Show me my coffee purchases"               → data_query
+  "What is my biggest purchase?"              → data_query
+  "How much money I spend?"                   → data_query
+  "How much money did I spend?"               → data_query
+  "How much dollars I spend?"                 → data_query
+  "How much dollars did I spend?"             → data_query
+  "How much dollars I total spend?"           → data_query
+  "How much have I spent in total?"           → data_query
+  "How much did I spend on coffee?"           → data_query
+  "How much I spent this week?"               → data_query
+  "What transactions do I have?"              → data_query
+  "Where did I spend my money?"               → data_query
+  "Show me my recent purchases"               → data_query
+  "How much did I spend at Peet's Coffee?"    → data_query
+  "How much are you?"                         → off_topic
+  "How are you?"                              → off_topic
+  "Tell me a joke"                            → off_topic
+  "What is the capital of France?"            → off_topic
+  "Hi, I just found now, might be you find"   → off_topic
+  "Do you know me?"                           → off_topic
+  "How much profits I spend?"                 → off_topic
+  "How much will we all spend?"               → off_topic
+  "How much we all have spent?"               → off_topic
+  "How much dollars is better?"               → off_topic
+  "We have to spend 8.5 dollars"              → off_topic
 """
 
 
