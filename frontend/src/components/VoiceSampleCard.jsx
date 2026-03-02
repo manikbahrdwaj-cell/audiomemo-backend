@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { createAudioRecorder, calculateDuration } from '../utils/audioRecorder';
 
 /**
@@ -6,7 +6,7 @@ import { createAudioRecorder, calculateDuration } from '../utils/audioRecorder';
  * Reusable card for recording individual voice samples
  * Features: Record, Stop, Playback, Delete with visual feedback
  */
-function VoiceSampleCard({ sampleNumber, onAudioRecorded, audioBlob, isRecording, onRecordingStart, onRecordingStop }) {
+const VoiceSampleCard = forwardRef(function VoiceSampleCard({ sampleNumber, onAudioRecorded, audioBlob, isRecording, onRecordingStart, onRecordingStop }, ref) {
   const [recordingTime, setRecordingTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -17,6 +17,25 @@ function VoiceSampleCard({ sampleNumber, onAudioRecorded, audioBlob, isRecording
   const timerRef = useRef(null);
   const audioRef = useRef(null);
   const urlRef = useRef(null);
+
+  // Expose stopRecording so the parent can imperatively halt this card's recording
+  // before starting a new one on a different card.
+  useImperativeHandle(ref, () => ({
+    stopRecording: async () => {
+      if (!recorderRef.current) return;
+      const blob = await recorderRef.current.stop();
+      if (blob) {
+        const dur = await calculateDuration(blob);
+        setDuration(dur);
+        onAudioRecorded(blob, dur);
+      }
+      recorderRef.current = null;
+      setLocalIsRecording(false);
+      setRecordingTime(0);
+      if (timerRef.current) clearInterval(timerRef.current);
+      onRecordingStop();
+    },
+  }));
 
   // Sample paragraphs for each sample number
   const SAMPLE_PARAGRAPHS = {
@@ -325,6 +344,6 @@ function VoiceSampleCard({ sampleNumber, onAudioRecorded, audioBlob, isRecording
       </div>
     </div>
   );
-}
+});
 
 export default VoiceSampleCard;

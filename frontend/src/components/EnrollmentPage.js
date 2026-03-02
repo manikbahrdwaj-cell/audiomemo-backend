@@ -19,6 +19,9 @@ function EnrollmentPage() {
   const [showChunkProgress, setShowChunkProgress] = useState(false);
   
   const wsRef = useRef(null);
+  // One ref per sample card — used to imperatively stop an active recording
+  // before a different card starts, ensuring at most one active recorder at a time.
+  const sampleRefs = useRef(Array.from({ length: REQUIRED_SAMPLES }, () => React.createRef()));
 
 
   const handlePhoneChange = (e) => {
@@ -28,8 +31,15 @@ function EnrollmentPage() {
     setError(null);
   };
 
-  // Track which sample is currently recording
-  const handleRecordingStart = (sampleNumber) => {
+  // Track which sample is currently recording.
+  // Stop any existing active recording before allowing a new one to start.
+  const handleRecordingStart = async (sampleNumber) => {
+    if (recordingBlackout !== -1) {
+      const activeRef = sampleRefs.current[recordingBlackout - 1];
+      if (activeRef?.current) {
+        await activeRef.current.stopRecording();
+      }
+    }
     setRecordingBlackout(sampleNumber);
   };
 
@@ -268,8 +278,8 @@ function EnrollmentPage() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow flex items-center justify-center p-6 lg:p-12">
-        <div className="max-w-4xl w-full">
+      <main className="flex-grow flex items-center justify-center px-16 py-12">
+        <div className="w-full">
           {/* Intro Text */}
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-slate-800 dark:text-white mb-2">
@@ -347,6 +357,7 @@ function EnrollmentPage() {
                 {samples.map((sample, index) => (
                   <VoiceSampleCard
                     key={index}
+                    ref={sampleRefs.current[index]}
                     sampleNumber={index + 1}
                     audioBlob={sample.blob}
                     isRecording={recordingBlackout === index + 1}
