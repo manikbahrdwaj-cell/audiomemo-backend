@@ -8,20 +8,26 @@ from app.db.connection import get_database
 logger = logging.getLogger(__name__)
 
 
-def store_voice_embedding(phone_number: str, embedding: np.ndarray) -> str:
+def store_voice_embedding(
+    phone_number: str,
+    embedding: np.ndarray,
+    name: Optional[str] = None,
+) -> str:
     """
     Store or update a voice embedding for a phone number
     
     Args:
         phone_number: Unique identifier (phone number)
         embedding: 192-dimensional voice embedding
+        name: Optional display name for the user
         
     Returns:
         Document ID of the stored/updated record
     """
     logger.info(
-        "store_voice_embedding() | phone=%s embedding_dim=%d norm=%.4f",
+        "store_voice_embedding() | phone=%s name=%r embedding_dim=%d norm=%.4f",
         phone_number,
+        name,
         len(embedding),
         float(np.linalg.norm(embedding)),
     )
@@ -33,15 +39,20 @@ def store_voice_embedding(phone_number: str, embedding: np.ndarray) -> str:
     embedding_list = embedding.tolist()
 
     now = datetime.utcnow()
+
+    set_fields: Dict[str, Any] = {
+        "embedding": embedding_list,
+        "embedding_dimension": len(embedding_list),
+        "updated_at": now,
+    }
+    if name and name.strip():
+        set_fields["name"] = name.strip()
+
     # Upsert: update if exists, insert if not
     result = collection.update_one(
         {"phone_number": phone_number},
         {
-            "$set": {
-                "embedding": embedding_list,
-                "embedding_dimension": len(embedding_list),
-                "updated_at": now,
-            },
+            "$set": set_fields,
             "$setOnInsert": {
                 "phone_number": phone_number,
                 "created_at": now,

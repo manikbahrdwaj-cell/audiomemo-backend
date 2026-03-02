@@ -540,6 +540,7 @@ class WebSocketEventHandler:
         try:
             client_id = connection.client_id
             phone_number = message.get("phone_number")
+            name: str = (message.get("name") or "").strip()
             
             # Get buffer
             if client_id not in self.audio_buffers:
@@ -604,7 +605,7 @@ class WebSocketEventHandler:
                 embedding = generate_embedding(buffer.get_data())
                 
                 # Store in database
-                vector_id = store_voice_embedding(phone_number, embedding)
+                vector_id = store_voice_embedding(phone_number, embedding, name=name or None)
                 
                 # Mark as completed
                 await dispatcher.mark_completed(session_id)

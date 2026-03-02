@@ -18,6 +18,7 @@ const ENROLLMENT_PHRASES = [
 ];
 
 function EnrollmentPage() {
+  const [name, setName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [samples, setSamples] = useState(Array(REQUIRED_SAMPLES).fill(null).map(() => ({ blob: null, duration: 0 })));
   const [sampleValidations, setSampleValidations] = useState(Array(REQUIRED_SAMPLES).fill(null));
@@ -33,6 +34,12 @@ function EnrollmentPage() {
   // before a different card starts, ensuring at most one active recorder at a time.
   const sampleRefs = useRef(Array.from({ length: REQUIRED_SAMPLES }, () => React.createRef()));
 
+
+  const handleNameChange = (e) => {
+    setName(e.target.value);
+    setResult(null);
+    setError(null);
+  };
 
   const handlePhoneChange = (e) => {
     const value = e.target.value.replace(/[^\d+\-\s]/g, '');
@@ -163,6 +170,12 @@ function EnrollmentPage() {
   };
 
   const handleSubmit = async () => {
+    // Validate name
+    if (!name.trim()) {
+      setError('Please enter your name');
+      return;
+    }
+
     // Validate phone number
     if (!phoneNumber.trim()) {
       setError('Please enter a phone number');
@@ -268,6 +281,7 @@ function EnrollmentPage() {
       ws.send(JSON.stringify({
         type: "enroll",
         phone_number: phoneNumber.trim(),
+        name: name.trim(),
         sample_count: audioBlobs.length
       }));
 
@@ -315,6 +329,7 @@ function EnrollmentPage() {
       // Reset form
       setSamples(Array(REQUIRED_SAMPLES).fill(null).map(() => ({ blob: null, duration: 0 })));
       setSampleValidations(Array(REQUIRED_SAMPLES).fill(null));
+      setName('');
       setPhoneNumber('');
     } catch (err) {
       const errorMessage = err.message || 'Failed to enroll voice samples. Please try again.';
@@ -380,10 +395,33 @@ function EnrollmentPage() {
             />
 
             <div className="p-8">
+              {/* Name Input */}
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2" htmlFor="full-name">
+                  Full Name <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <span className="material-icons-round text-slate-400">person</span>
+                  </div>
+                  <input
+                    id="full-name"
+                    name="full-name"
+                    type="text"
+                    placeholder="John Smith"
+                    value={name}
+                    onChange={handleNameChange}
+                    disabled={recordingBlackout !== -1 || isSubmitting}
+                    className="block w-full pl-10 pr-3 py-3 border border-slate-300 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-primary focus:border-transparent transition-all outline-none disabled:opacity-50"
+                  />
+                </div>
+                <p className="mt-2 text-xs text-slate-500">Your name will be stored alongside your voice profile.</p>
+              </div>
+
               {/* Phone Input */}
               <div className="mb-8">
                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2" htmlFor="phone-number">
-                  Unique Identifier (Phone Number)
+                  Unique Identifier (Phone Number) <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -505,9 +543,9 @@ function EnrollmentPage() {
               <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
                 <button
                   onClick={handleSubmit}
-                  disabled={!phoneNumber.trim() || !isAllSamplesRecorded || !allValidated || isSubmitting || recordingBlackout !== -1}
+                  disabled={!name.trim() || !phoneNumber.trim() || !isAllSamplesRecorded || !allValidated || isSubmitting || recordingBlackout !== -1}
                   className={`w-full py-4 font-bold rounded-lg shadow-md transition-all flex items-center justify-center gap-2 ${
-                    isAllSamplesRecorded && allValidated && phoneNumber.trim()
+                    isAllSamplesRecorded && allValidated && phoneNumber.trim() && name.trim()
                       ? 'bg-primary hover:bg-primary/90 text-white cursor-pointer'
                       : 'bg-slate-300 dark:bg-slate-700 text-slate-500 dark:text-slate-400 cursor-not-allowed opacity-50'
                   }`}
