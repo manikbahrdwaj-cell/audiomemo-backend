@@ -160,6 +160,7 @@ async def _handle_transcript(client_id: str, transcription: str) -> None:
         "generated_sql": "",
         "sql_result": "",
         "error_count": 0,
+        "intent": "",          # set to "data_query" or "off_topic" by guardrail node
         "conversation_history": list(session["conversation_history"]),
     }
 

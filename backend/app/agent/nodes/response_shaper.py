@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Callable
 
@@ -19,20 +20,38 @@ _SYSTEM_PROMPT = (
     "If given a JSON error object, apologise briefly without exposing internal details."
 )
 
+# Spoken refusal for off-topic questions
+_OFF_TOPIC_RESPONSE = (
+    "I can only help with questions about your own transactions and spending history. "
+    "Please ask me about your purchases, merchants, or categories."
+)
+
 
 def build_response_shaper_node(llm) -> Callable[[AgentState], dict]:
-    """Return an async LangGraph node that converts SQL results to spoken text.
+    """Return an async LangGraph node that converts results to spoken text.
 
-    The node passes the raw ``sql_result`` JSON string to the LLM and asks it
-    to produce a single, plain spoken sentence suitable for TTS synthesis.
-    JSON error objects from ``tool_executor`` are handled gracefully — the LLM
-    is instructed to apologise without exposing internal details.
+    Handles two cases:
+    - off_topic sentinel (set by guardrail): returns a polite refusal without
+      calling the LLM or DB.
+    - normal sql_result JSON: shapes it into a natural spoken sentence via LLM.
     """
 
     async def node(state: AgentState) -> dict:
+        sql_result = state.get("sql_result", "")
+
+        # --- Off-topic short-circuit -------------------------------------------
+        try:
+            parsed = json.loads(sql_result) if sql_result else None
+            if isinstance(parsed, dict) and parsed.get("off_topic"):
+                logger.info("[ResponseShaper] Off-topic query — returning refusal")
+                return {"messages": [AIMessage(content=_OFF_TOPIC_RESPONSE)]}
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        # --- Normal path -------------------------------------------------------
         messages = [
             SystemMessage(content=_SYSTEM_PROMPT),
-            HumanMessage(content=state["sql_result"]),
+            HumanMessage(content=sql_result),
         ]
 
         logger.info("[ResponseShaper] Shaping SQL result into speech")

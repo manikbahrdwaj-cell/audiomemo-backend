@@ -125,7 +125,10 @@ export function useRealtimeVerification() {
       console.error('[useRealtimeVerification] Connection failed:', err);
       setStatus(REALTIME_VERIFICATION_STATUS.ERROR);
       setError(err.message || 'Failed to connect for verification');
-      setIsVerified(false);
+      // Do NOT set isVerified=false here — that makes isComplete=true which
+      // hides the setup form and shows the "NOT VERIFIED" result screen.
+      // Keep isVerified=null so the setup form stays visible and the error
+      // is shown inline above the "Initiate Call" button.
       throw err;
     }
   }, []);
@@ -152,7 +155,11 @@ export function useRealtimeVerification() {
       await service.sendAudioChunk(audioBlob);
     } catch (err) {
       console.error('[useRealtimeVerification] Error submitting chunk:', err);
-      setError(err.message || 'Failed to submit audio chunk');
+      // "WebSocket not connected" is an expected race condition when the user ends
+      // the call while a chunk is still in-flight. Don't surface it as a UI error.
+      if (err.message !== 'WebSocket not connected') {
+        setError(err.message || 'Failed to submit audio chunk');
+      }
       throw err;
     }
   }, []);

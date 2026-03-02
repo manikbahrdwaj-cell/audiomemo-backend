@@ -125,7 +125,7 @@ def main() -> None:
     for phone in all_phones:
         doc = embeddings_col.find_one({"phone_number": phone}, {"_id": 1})
         if doc:
-            phone_to_user_id[phone] = str(doc["_id"])
+            phone_to_user_id[phone] = str(doc["_id"]).strip()
         else:
             print(f"  WARNING: no voice_embedding found for phone {phone!r} — skipping their transactions")
 

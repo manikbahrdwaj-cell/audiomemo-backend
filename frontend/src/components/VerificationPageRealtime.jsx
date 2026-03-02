@@ -192,7 +192,7 @@ function VerificationPageRealtime() {
       pendingStartRecordingRef.current = false;
       setIsConnecting(false);
       console.error('[VerificationPageRealtime] Failed to initiate call:', err);
-      alert(err.message || 'Failed to initiate call. Ensure the server is running.');
+      // Error is shown inline in the form via verification.error — no alert() needed.
     }
   };
 

@@ -35,3 +35,7 @@ class AgentState(TypedDict):
     # Each entry: {"role": "user" | "assistant", "text": str}
     # Graph nodes must NOT mutate this list.
     conversation_history: list[dict]
+
+    # Set by the guardrail node: "data_query" or "off_topic".
+    # Drives the conditional edge that bypasses the DB for irrelevant questions.
+    intent: str

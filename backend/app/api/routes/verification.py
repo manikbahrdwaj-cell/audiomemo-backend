@@ -734,16 +734,21 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
 
     logger.info("WebSocket /ws/verify/%s — connection attempt", phone_number)
 
-    # Reject unenrolled numbers before accepting the socket
+    # Reject unenrolled numbers — must accept first so the browser receives the
+    # error JSON message (closing before accept sends an HTTP error with no body).
+    await websocket.accept()
     is_enrolled = check_enrollment(phone_number)
     if not is_enrolled:
         logger.warning(
             "WebSocket verify rejected — not enrolled | phone=%s", phone_number
         )
-        await websocket.close(code=1002, reason=f"Phone number {phone_number} is not enrolled")
+        await websocket.send_json({
+            "type": "error",
+            "error": "not_enrolled",
+            "message": f"Phone number {phone_number} is not enrolled. Please enroll first.",
+        })
+        await websocket.close(code=1002)
         return
-
-    await websocket.accept()
     logger.info("WebSocket /ws/verify/%s — accepted", phone_number)
 
     streaming_service = get_verification_streaming_manager()

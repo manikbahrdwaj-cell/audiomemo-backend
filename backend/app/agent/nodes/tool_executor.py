@@ -27,6 +27,8 @@ def _run_query(query_json: str) -> list[dict]:
     col = get_transactions_collection()
 
     filter_ = query.get("filter", {})
+    # Strip stray whitespace from string filter values (guards against \n-tainted IDs).
+    filter_ = {k: v.strip() if isinstance(v, str) else v for k, v in filter_.items()}
     sort_spec = query.get("sort", {"timestamp": -1})
     limit = int(query.get("limit", 20))
 

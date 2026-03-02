@@ -1,0 +1,112 @@
+"""Guardrail node — intent classifier that gates the LangGraph pipeline.
+
+Only utterances that are clearly about the authenticated user's own financial
+data (transactions, spending, merchants, categories) are forwarded to the
+query_compiler → DB path.
+
+Everything else (greetings, general knowledge questions, weather, jokes, etc.)
+is short-circuited: ``intent`` is set to ``"off_topic"`` and ``sql_result``
+pre-populated with a sentinel so ``response_shaper`` can emit a polite refusal
+without ever touching the database.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Callable
+
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from app.agent.state import AgentState
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Prompt
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT = """\
+You are a strict topic classifier for a voice banking assistant.
+
+The assistant can ONLY answer questions about the authenticated user's own
+financial transactions stored in a database with these fields:
+  - amount        (how much was spent)
+  - merchant      (store / vendor name)
+  - category      (Grocery, Coffee, Fuel, Online Retail, Restaurant)
+  - timestamp     (when the transaction happened)
+
+Your job: decide whether the user's message is asking about their own
+transaction or spending history, OR asking about something else entirely.
+
+Reply with EXACTLY one word — no punctuation, no explanation:
+  data_query   — the question is about the user's own transactions / spending
+  off_topic    — anything else (greetings, general knowledge, weather, jokes,
+                 personal questions not related to transactions, etc.)
+
+Examples:
+  "What did I spend last month?"          → data_query
+  "Show me my coffee purchases"           → data_query
+  "What is my biggest purchase?"          → data_query
+  "How are you?"                          → off_topic
+  "Tell me a joke"                        → off_topic
+  "What is the capital of France?"        → off_topic
+  "Hi, I just found now, might be you find" → off_topic
+  "Do you know me?"                       → off_topic
+"""
+
+
+# ---------------------------------------------------------------------------
+# Node factory
+# ---------------------------------------------------------------------------
+
+def build_guardrail_node(llm) -> Callable[[AgentState], dict]:
+    """Return an async LangGraph node that classifies utterance intent.
+
+    Returns a dict that updates:
+      - ``intent``:     ``"data_query"`` | ``"off_topic"``
+      - ``sql_result``: pre-filled refusal sentinel when off_topic so that
+                        ``response_shaper`` can immediately produce a spoken
+                        reply without executing any DB query.
+    """
+
+    async def node(state: AgentState) -> dict:
+        utterance = state.get("utterance", "").strip()
+        logger.info(
+            "[Guardrail] Classifying utterance | utterance=%r", utterance
+        )
+
+        try:
+            response = await llm.ainvoke([
+                SystemMessage(content=_SYSTEM_PROMPT),
+                HumanMessage(content=utterance),
+            ])
+            label = response.content.strip().lower().split()[0]
+        except Exception as exc:
+            logger.warning("[Guardrail] Classification failed (%s) — defaulting to data_query", exc)
+            label = "data_query"
+
+        # Normalise to exactly one of two values
+        intent = "data_query" if label == "data_query" else "off_topic"
+
+        logger.info("[Guardrail] Intent=%s | utterance=%r", intent, utterance)
+
+        if intent == "off_topic":
+            return {
+                "intent": "off_topic",
+                # Sentinel value: response_shaper checks for this key
+                "sql_result": '{"off_topic": true}',
+                # Skip query_compiler / security / tool_executor
+                "generated_sql": "",
+            }
+
+        return {"intent": "data_query"}
+
+    return node
+
+
+# ---------------------------------------------------------------------------
+# Routing helper used by graph.py
+# ---------------------------------------------------------------------------
+
+def route_after_guardrail(state: AgentState) -> str:
+    """Return the next node name based on the intent set by the guardrail."""
+    return "query_compiler" if state.get("intent") == "data_query" else "response_shaper"

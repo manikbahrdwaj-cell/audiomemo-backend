@@ -162,7 +162,7 @@ class RealtimeSTTSession:
         try:
             self._ws = await websockets.connect(
                 _REALTIME_URL,
-                extra_headers=headers,
+                additional_headers=headers,
                 max_size=10 * 1024 * 1024,
                 open_timeout=10,
             )
