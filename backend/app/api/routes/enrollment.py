@@ -588,6 +588,48 @@ async def list_enrollment_sessions():
     }
 
 
+@router.post("/enrollment/validate-sample")
+async def validate_enrollment_sample(
+    file: UploadFile = File(...),
+    expected_text: str = Form(...),
+    sample_number: int = Form(1),
+):
+    """
+    Transcribe a recorded audio sample with Whisper and compare it against
+    the expected phrase using fuzzy matching (85 % similarity threshold).
+
+    Used during enrollment so the frontend can reject samples where the user
+    spoke something different from the displayed text.
+
+    Args:
+        file:          WAV audio file uploaded from the browser.
+        expected_text: The phrase the user was asked to read aloud.
+        sample_number: 1-based index of the sample (1–5).
+
+    Returns:
+        JSON with ``matched`` (bool), ``transcription`` (str),
+        ``similarity`` (float 0-1) and ``sample_number`` (int).
+    """
+    from app.services.sample_validation import validate_sample_text
+
+    audio_bytes = await file.read()
+
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Audio file is empty")
+
+    try:
+        result = await validate_sample_text(
+            audio_bytes=audio_bytes,
+            expected_text=expected_text,
+            sample_number=sample_number,
+        )
+    except Exception as exc:
+        logger.error("validate_enrollment_sample failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}")
+
+    return result
+
+
 @router.post("/enrollment/cleanup")
 async def cleanup_expired_enrollment_sessions(max_age_hours: int = 1):
     """

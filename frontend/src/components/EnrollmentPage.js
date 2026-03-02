@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { enrollVoice } from '../services/api';
+import { enrollVoice, validateEnrollmentSample } from '../services/api';
 import { splitAudioIntoBase64Chunks, getChunkDurationByMode } from '../utils/audioChunkSplitter';
 import ChunkProcessingIndicator from './ChunkProcessingIndicator';
 import VoiceSampleCard from './VoiceSampleCard';
@@ -8,9 +8,19 @@ import { useChunkProgress } from '../hooks/useChunkProgress';
 const REQUIRED_SAMPLES = 5;
 const MIN_SAMPLE_DURATION = 2; // seconds
 
+/** Expected phrases — must stay in sync with VoiceSampleCard SAMPLE_PARAGRAPHS */
+const ENROLLMENT_PHRASES = [
+  "The quick brown fox jumps over the lazy dog. This is a pangram that contains every letter of the English alphabet.",
+  "She sells seashells by the seashore. The shells she sells are surely seashells.",
+  "Peter Piper picked a peck of pickled peppers. A peck of pickled peppers Peter Piper picked.",
+  "How much wood would a woodchuck chuck if a woodchuck could chuck wood? Wood would a woodchuck chuck.",
+  "Please speak clearly and naturally. This sample will help create a unique voice profile for verification.",
+];
+
 function EnrollmentPage() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [samples, setSamples] = useState(Array(REQUIRED_SAMPLES).fill(null).map(() => ({ blob: null, duration: 0 })));
+  const [sampleValidations, setSampleValidations] = useState(Array(REQUIRED_SAMPLES).fill(null));
   const [recordingBlackout, setRecordingBlackout] = useState(-1); // tracks which sample is recording
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState(null);
@@ -48,16 +58,68 @@ function EnrollmentPage() {
     setRecordingBlackout(-1);
   };
 
-  // Update sample audio blob
+  // Update sample audio blob and trigger STT validation
   const handleAudioRecorded = (sampleIndex, audioBlob, duration) => {
     const newSamples = [...samples];
     newSamples[sampleIndex] = { blob: audioBlob, duration: duration || 0 };
     setSamples(newSamples);
+
+    if (!audioBlob) {
+      // Sample deleted — clear its validation
+      const v = [...sampleValidations];
+      v[sampleIndex] = null;
+      setSampleValidations(v);
+      return;
+    }
+
+    // Mark as "validating" immediately so the card shows the spinner
+    const vStart = [...sampleValidations];
+    vStart[sampleIndex] = { status: 'validating' };
+    setSampleValidations(vStart);
+
+    // Run Whisper validation asynchronously
+    const expectedText = ENROLLMENT_PHRASES[sampleIndex] || '';
+    validateEnrollmentSample(audioBlob, expectedText, sampleIndex + 1)
+      .then((result) => {
+        setSampleValidations((prev) => {
+          const updated = [...prev];
+          updated[sampleIndex] = {
+            status: result.matched ? 'matched' : 'mismatch',
+            transcription: result.transcription,
+            similarity: result.similarity,
+          };
+          return updated;
+        });
+      })
+      .catch((err) => {
+        console.warn(`STT validation failed for sample ${sampleIndex + 1}:`, err);
+        setSampleValidations((prev) => {
+          const updated = [...prev];
+          updated[sampleIndex] = { status: 'error', message: err.message };
+          return updated;
+        });
+      });
   };
 
   // Count recorded samples
   const getRecordedCount = () => {
     return samples.filter(s => s.blob !== null).length;
+  };
+
+  /**
+   * Returns true when all samples are recorded AND all STT validations have
+   * passed (status === 'matched') or validation was unavailable (status === 'error').
+   */
+  const isAllSamplesValidated = () => {
+    for (let i = 0; i < REQUIRED_SAMPLES; i++) {
+      if (!samples[i].blob) return false;
+      const v = sampleValidations[i];
+      // Treat null/validating as not yet done
+      if (!v || v.status === 'validating') return false;
+      // Treat 'mismatch' as failure
+      if (v.status === 'mismatch') return false;
+    }
+    return true;
   };
 
   // Validate all samples meet requirements
@@ -76,6 +138,17 @@ function EnrollmentPage() {
     for (let i = 0; i < REQUIRED_SAMPLES; i++) {
       if (samples[i].duration < MIN_SAMPLE_DURATION) {
         return { valid: false, message: `Sample ${i + 1} is too short (${samples[i].duration.toFixed(1)}s). Minimum required: ${MIN_SAMPLE_DURATION}s` };
+      }
+    }
+
+    // Check STT validations
+    for (let i = 0; i < REQUIRED_SAMPLES; i++) {
+      const v = sampleValidations[i];
+      if (!v || v.status === 'validating') {
+        return { valid: false, message: `Sample ${i + 1} is still being validated. Please wait.` };
+      }
+      if (v.status === 'mismatch') {
+        return { valid: false, message: `Sample ${i + 1} text does not match. Please re-record and speak the displayed phrase.` };
       }
     }
     
@@ -241,6 +314,7 @@ function EnrollmentPage() {
       
       // Reset form
       setSamples(Array(REQUIRED_SAMPLES).fill(null).map(() => ({ blob: null, duration: 0 })));
+      setSampleValidations(Array(REQUIRED_SAMPLES).fill(null));
       setPhoneNumber('');
     } catch (err) {
       const errorMessage = err.message || 'Failed to enroll voice samples. Please try again.';
@@ -258,6 +332,7 @@ function EnrollmentPage() {
 
   const recordedCount = getRecordedCount();
   const isAllSamplesRecorded = recordedCount === REQUIRED_SAMPLES;
+  const allValidated = isAllSamplesValidated();
 
   return (
     <div className="min-h-screen bg-background-light dark:bg-background-dark flex flex-col">
@@ -364,6 +439,8 @@ function EnrollmentPage() {
                     onRecordingStart={handleRecordingStart}
                     onRecordingStop={handleRecordingStop}
                     onAudioRecorded={(blob, duration) => handleAudioRecorded(index, blob, duration)}
+                    validationState={sampleValidations[index]}
+                    expectedText={ENROLLMENT_PHRASES[index]}
                   />
                 ))}
               </div>
@@ -409,13 +486,28 @@ function EnrollmentPage() {
                 </div>
               )}
 
+              {/* STT validation pending / mismatch notice */}
+              {isAllSamplesRecorded && !allValidated && (
+                <div className="mb-8 w-full bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+                  <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
+                    <span className="material-icons text-lg">pending</span>
+                    <div>
+                      <p className="font-semibold text-sm">Validation in progress</p>
+                      <p className="text-xs opacity-75">
+                        Some samples are still being verified or need re-recording. Check each card for details.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Submit Button */}
               <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
                 <button
                   onClick={handleSubmit}
-                  disabled={!phoneNumber.trim() || !isAllSamplesRecorded || isSubmitting || recordingBlackout !== -1}
+                  disabled={!phoneNumber.trim() || !isAllSamplesRecorded || !allValidated || isSubmitting || recordingBlackout !== -1}
                   className={`w-full py-4 font-bold rounded-lg shadow-md transition-all flex items-center justify-center gap-2 ${
-                    isAllSamplesRecorded && phoneNumber.trim()
+                    isAllSamplesRecorded && allValidated && phoneNumber.trim()
                       ? 'bg-primary hover:bg-primary/90 text-white cursor-pointer'
                       : 'bg-slate-300 dark:bg-slate-700 text-slate-500 dark:text-slate-400 cursor-not-allowed opacity-50'
                   }`}
@@ -437,12 +529,19 @@ function EnrollmentPage() {
 
             {/* Footer Status Bar */}
             <div className="bg-slate-50 dark:bg-slate-950 px-8 py-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-4">
                 <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
                   Samples Ready: <span className={`font-semibold ${isAllSamplesRecorded ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-800 dark:text-slate-200'}`}>
                     {recordedCount}/{REQUIRED_SAMPLES}
                   </span>
                 </span>
+                {isAllSamplesRecorded && (
+                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                    Validated: <span className={`font-semibold ${allValidated ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                      {sampleValidations.filter(v => v?.status === 'matched' || v?.status === 'error').length}/{REQUIRED_SAMPLES}
+                    </span>
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 text-xs text-slate-400">
                 <span className="material-icons-round text-sm">security</span>

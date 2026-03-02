@@ -57,4 +57,26 @@ export async function checkEnrollment(phoneNumber) {
   return response.data;
 }
 
+/**
+ * Validate a recorded enrollment sample via Whisper STT.
+ * Sends audio to backend, gets transcription, and receives fuzzy-match result.
+ *
+ * @param {Blob}   audioBlob    - Recorded audio blob (WAV/webm)
+ * @param {string} expectedText - The phrase the user was shown
+ * @param {number} sampleNumber - 1-based sample index (1–5)
+ * @returns {Promise<{matched: boolean, transcription: string, similarity: number, sample_number: number}>}
+ */
+export async function validateEnrollmentSample(audioBlob, expectedText, sampleNumber) {
+  const formData = new FormData();
+  formData.append('file', audioBlob, 'sample.wav');
+  formData.append('expected_text', expectedText);
+  formData.append('sample_number', String(sampleNumber));
+
+  const response = await api.post('/enrollment/validate-sample', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 30000,
+  });
+  return response.data;
+}
+
 export default api;

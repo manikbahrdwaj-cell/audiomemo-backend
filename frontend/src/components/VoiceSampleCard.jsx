@@ -6,7 +6,14 @@ import { createAudioRecorder, calculateDuration } from '../utils/audioRecorder';
  * Reusable card for recording individual voice samples
  * Features: Record, Stop, Playback, Delete with visual feedback
  */
-const VoiceSampleCard = forwardRef(function VoiceSampleCard({ sampleNumber, onAudioRecorded, audioBlob, isRecording, onRecordingStart, onRecordingStop }, ref) {
+/**
+ * validationState shape:
+ *   null                                             – not yet validated
+ *   { status: 'validating' }                         – Whisper call in-flight
+ *   { status: 'matched',  transcription, similarity } – text matched
+ *   { status: 'mismatch', transcription, similarity } – text did NOT match
+ */
+const VoiceSampleCard = forwardRef(function VoiceSampleCard({ sampleNumber, onAudioRecorded, audioBlob, isRecording, onRecordingStart, onRecordingStop, validationState, expectedText }, ref) {
   const [recordingTime, setRecordingTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -47,7 +54,7 @@ const VoiceSampleCard = forwardRef(function VoiceSampleCard({ sampleNumber, onAu
   };
 
   const getSampleParagraph = () => {
-    return SAMPLE_PARAGRAPHS[sampleNumber] || '';
+    return expectedText || SAMPLE_PARAGRAPHS[sampleNumber] || '';
   };
 
   // Manage audio URL creation and cleanup
@@ -78,27 +85,48 @@ const VoiceSampleCard = forwardRef(function VoiceSampleCard({ sampleNumber, onAu
     };
   }, [audioBlob]);
 
-  // Determine card color based on recording status
+  // Determine card color based on recording + validation status
   const getCardColor = () => {
     if (audioBlob) {
-      return 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800';
+      if (!validationState || validationState.status === 'validating') {
+        return 'bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-700';
+      }
+      if (validationState.status === 'matched') {
+        return 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800';
+      }
+      if (validationState.status === 'mismatch') {
+        return 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-700';
+      }
     }
-    return 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800';
+    return 'bg-slate-50 dark:bg-slate-900/30 border-slate-200 dark:border-slate-700';
   };
 
   const getStatusColor = () => {
     if (audioBlob) {
-      return 'text-emerald-700 dark:text-emerald-300';
+      if (!validationState || validationState.status === 'validating') {
+        return 'text-amber-700 dark:text-amber-300';
+      }
+      if (validationState.status === 'matched') return 'text-emerald-700 dark:text-emerald-300';
+      if (validationState.status === 'mismatch') return 'text-red-700 dark:text-red-300';
     }
-    return 'text-red-700 dark:text-red-300';
+    return 'text-slate-500 dark:text-slate-400';
   };
 
   const getStatusIcon = () => {
-    return audioBlob ? 'check_circle' : 'circle';
+    if (!audioBlob) return 'circle';
+    if (!validationState || validationState.status === 'validating') return 'pending';
+    if (validationState.status === 'matched') return 'check_circle';
+    if (validationState.status === 'mismatch') return 'cancel';
+    return 'check_circle';
   };
 
   const getStatusText = () => {
-    return audioBlob ? 'Recorded' : 'Not Recorded';
+    if (!audioBlob) return 'Not Recorded';
+    if (!validationState) return 'Recorded';
+    if (validationState.status === 'validating') return 'Validating…';
+    if (validationState.status === 'matched') return 'Validated';
+    if (validationState.status === 'mismatch') return 'Text Mismatch';
+    return 'Recorded';
   };
 
   // Start recording
@@ -232,20 +260,54 @@ const VoiceSampleCard = forwardRef(function VoiceSampleCard({ sampleNumber, onAu
         </div>
       </div>
 
-      {/* Sample Paragraph - displayed when recording */}
-      {localIsRecording && (
-        <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/30 border-2 border-blue-300 dark:border-blue-600 rounded-lg">
-          <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2 text-center">
-            📝 Please speak the following paragraph clearly:
-          </p>
-          <div className="p-3 bg-white dark:bg-slate-800 rounded border border-blue-200 dark:border-blue-700">
-            <p className="text-sm text-center text-gray-800 dark:text-gray-200 font-medium leading-relaxed italic">
-              "{getSampleParagraph()}"
-            </p>
-          </div>
-          <p className="text-xs text-gray-600 dark:text-gray-400 mt-2 text-center">
+      {/* Sample Paragraph — always visible so users know which phrase to speak */}
+      <div className={`mb-4 p-4 rounded-lg border-2 ${
+        localIsRecording
+          ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-600'
+          : 'bg-white dark:bg-slate-800/60 border-slate-200 dark:border-slate-700'
+      }`}>
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
+          {localIsRecording ? '🎙 Speak this phrase:' : '📝 Expected phrase:'}
+        </p>
+        <p className="text-sm text-slate-800 dark:text-slate-200 font-medium leading-relaxed italic">
+          "{getSampleParagraph()}"
+        </p>
+        {localIsRecording && (
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
             Speak naturally and clearly for best results.
           </p>
+        )}
+      </div>
+
+      {/* Validating spinner */}
+      {audioBlob && validationState?.status === 'validating' && (
+        <div className="mb-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 flex items-center gap-2 text-amber-700 dark:text-amber-300">
+          <span className="material-icons text-base animate-spin">sync</span>
+          <span className="text-xs font-medium">Checking transcription…</span>
+        </div>
+      )}
+
+      {/* Validation result banner */}
+      {audioBlob && validationState && validationState.status !== 'validating' && (
+        <div className={`mb-4 p-3 rounded-lg flex items-start gap-2 ${
+          validationState.status === 'matched'
+            ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-200'
+            : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
+        }`}>
+          <span className="material-icons text-base mt-0.5">
+            {validationState.status === 'matched' ? 'check_circle' : 'warning'}
+          </span>
+          <div className="flex-1 min-w-0">
+            {validationState.status === 'mismatch' && (
+              <p className="font-semibold text-xs mb-1">Speak the same lines displayed below.</p>
+            )}
+            <p className="text-xs opacity-80 truncate">
+              Heard: "{validationState.transcription || '(nothing)'}"
+            </p>
+            <p className="text-xs opacity-60 mt-0.5">
+              Match: {Math.round((validationState.similarity || 0) * 100)}%
+            </p>
+          </div>
         </div>
       )}
 
