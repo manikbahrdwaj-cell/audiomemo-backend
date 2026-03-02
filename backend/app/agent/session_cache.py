@@ -28,6 +28,10 @@ def set_verified(client_id: str, phone_number: str, user_id: str) -> None:
         # reach the WebSocket after an async transcript event fires.
         "send_ws": None,
         "conversation_history": [],
+        # tts_playing: True while agent TTS audio is being played on the client.
+        # Audio chunks are suppressed during this window to prevent STT from
+        # transcribing the speaker echo back into the pipeline.
+        "tts_playing": False,
     }
 
 

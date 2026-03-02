@@ -37,6 +37,9 @@ function VerificationPageRealtime() {
   const chunkingServiceRef = useRef(null);
   const pendingStartRecordingRef = useRef(false);
   const agentAudioRef = useRef(null);
+  // Stale-closure-safe flags checked inside audio.onended callbacks
+  const isAgentModeRef = useRef(false);
+  const isVerificationCompleteRef = useRef(false);
   
   // Real-time verification hook
   const verification = useRealtimeVerification();
@@ -89,7 +92,13 @@ function VerificationPageRealtime() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [verification.isComplete]);
 
-  // Auto-play agent audio when a new assistant message arrives
+  // Keep stale-closure-safe refs in sync with state
+  useEffect(() => { isAgentModeRef.current = isAgentMode; }, [isAgentMode]);
+  useEffect(() => { isVerificationCompleteRef.current = verification.isComplete; }, [verification.isComplete]);
+
+  // Auto-play agent audio when a new assistant message arrives.
+  // During the verification phase (before biometric success) start / restart
+  // recording once the TTS finishes so that greeting and recording never overlap.
   useEffect(() => {
     const messages = verification.agentMessages;
     if (messages.length === 0) return;
@@ -100,17 +109,52 @@ function VerificationPageRealtime() {
       }
       const audio = new Audio(`data:audio/mp3;base64,${last.audioBase64}`);
       agentAudioRef.current = audio;
-      audio.play().catch((e) => console.warn('[Agent] Auto-play blocked:', e));
+
+      // After the TTS ends, restart recording only when still in the
+      // verification phase (greeting or retry-prompt just finished).
+      audio.onended = () => {
+        if (!isAgentModeRef.current && !isVerificationCompleteRef.current) {
+          console.log('[VerificationPageRealtime] TTS ended in verification phase — starting recording');
+          handleStartRecordingCore();
+        }
+      };
+
+      audio.play().catch((e) => {
+        console.warn('[Agent] Auto-play blocked:', e);
+        // Autoplay was blocked — start recording immediately so the user isn't
+        // stuck waiting for an onended callback that will never fire.
+        if (!isAgentModeRef.current && !isVerificationCompleteRef.current) {
+          handleStartRecordingCore();
+        }
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [verification.agentMessages.length]);
 
-  // Auto-start recording once WebSocket session is ready
+  // Stop recording immediately when a non-final verification chunk fails.
+  // The backend follows this with a retry-prompt TTS; once that TTS ends,
+  // audio.onended above restarts recording automatically.
+  useEffect(() => {
+    if (verification.chunkResults.length === 0) return;
+    const last = verification.chunkResults[verification.chunkResults.length - 1];
+    if (!last.isMatch && !verification.isComplete && isRecording && chunkingServiceRef.current) {
+      console.log('[VerificationPageRealtime] Chunk failed (non-final) — pausing recording until retry TTS ends');
+      chunkingServiceRef.current.stopRecording();
+      setIsRecording(false);
+      setRecordingTime(0);
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verification.chunkResults.length]);
+
+  // Clear connecting state once WebSocket session is ready.
+  // Recording is deferred until the greeting TTS finishes playing
+  // (handled by audio.onended in the agent-audio effect above).
   useEffect(() => {
     if (verification.isReady && pendingStartRecordingRef.current) {
       pendingStartRecordingRef.current = false;
       setIsConnecting(false);
-      handleStartRecordingCore();
+      // Recording starts via audio.onended once the greeting TTS finishes.
     }
   }, [verification.isReady]);
 

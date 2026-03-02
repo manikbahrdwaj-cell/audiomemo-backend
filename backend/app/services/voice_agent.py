@@ -92,11 +92,18 @@ class VoiceAgentOrchestrator:
 
         # ------------------------------------------------------------------
         # 4. Forward audio to the Realtime API.
-        #    The API's server VAD will fire callbacks asynchronously.
+        #    Skip while TTS is playing to prevent microphone echo from being
+        #    transcribed and fed back into the pipeline.
         # ------------------------------------------------------------------
         realtime_stt = session.get("realtime_stt")
         if realtime_stt is not None:
-            await realtime_stt.send_audio(audio_bytes)
+            if session.get("tts_playing"):
+                logger.debug(
+                    "[Agent] Suppressing audio chunk — TTS still playing | client_id=%s",
+                    client_id,
+                )
+            else:
+                await realtime_stt.send_audio(audio_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -201,12 +208,28 @@ async def _handle_transcript(client_id: str, transcription: str) -> None:
     # ------------------------------------------------------------------
     logger.info("[Agent] ← Responding: %r | client_id=%s", spoken, client_id)
     tts_bytes = await synthesise_speech(spoken)
+
+    # Block audio forwarding while the client plays back TTS to prevent echo.
+    # Estimate playback duration: ~2.5 words/second + 1 s tail buffer.
+    playback_seconds = max(3.0, len(spoken.split()) / 2.5 + 1.0)
+    session_cache.update(client_id, tts_playing=True)
+
     await _send(send_ws, {
         "type": "agent_audio",
         "data": base64.b64encode(tts_bytes).decode(),
         "transcript": transcription,
         "text": spoken,
     })
+
+    async def _clear_tts_playing() -> None:
+        await asyncio.sleep(playback_seconds)
+        session_cache.update(client_id, tts_playing=False)
+        logger.debug(
+            "[Agent] TTS playback window closed | client_id=%s duration=%.1fs",
+            client_id, playback_seconds,
+        )
+
+    asyncio.create_task(_clear_tts_playing())
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +262,31 @@ async def _send(send_ws: Callable, payload: dict) -> None:
             pass
         else:
             raise
+
+
+# ---------------------------------------------------------------------------
+# Public helper: handle the first utterance immediately after verification
+# ---------------------------------------------------------------------------
+
+async def process_verified_utterance(
+    client_id: str,
+    transcription: str,
+    send_ws: Callable,
+) -> None:
+    """Handle the speech that triggered a successful biometric verification.
+
+    Called once, right after ``final_status="verified"`` is received, to send
+    the already-transcribed utterance through the LangGraph pipeline and reply
+    via TTS — without the client needing to speak again.
+
+    Args:
+        client_id:     Session-cache key (``session.session_id``).
+        transcription: Whisper transcript of the verified audio chunk.
+        send_ws:       Async callable that sends JSON to the WebSocket client.
+    """
+    # Make sure the session cache has an up-to-date send_ws before delegating.
+    session_cache.update(client_id, send_ws=send_ws)
+    await _handle_transcript(client_id, transcription)
 
 
 # ---------------------------------------------------------------------------

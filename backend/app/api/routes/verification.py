@@ -734,21 +734,16 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
 
     logger.info("WebSocket /ws/verify/%s — connection attempt", phone_number)
 
-    # Reject unenrolled numbers — must accept first so the browser receives the
-    # error JSON message (closing before accept sends an HTTP error with no body).
-    await websocket.accept()
+    # Reject unenrolled numbers before accepting the socket
     is_enrolled = check_enrollment(phone_number)
     if not is_enrolled:
         logger.warning(
             "WebSocket verify rejected — not enrolled | phone=%s", phone_number
         )
-        await websocket.send_json({
-            "type": "error",
-            "error": "not_enrolled",
-            "message": f"Phone number {phone_number} is not enrolled. Please enroll first.",
-        })
-        await websocket.close(code=1002)
+        await websocket.close(code=1002, reason=f"Phone number {phone_number} is not enrolled")
         return
+
+    await websocket.accept()
     logger.info("WebSocket /ws/verify/%s — accepted", phone_number)
 
     streaming_service = get_verification_streaming_manager()
@@ -781,6 +776,26 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
         "target_chunk_duration": session.target_duration_seconds,
         "threshold": session.threshold,
     })
+
+    # ------------------------------------------------------------------
+    # Send personalised greeting TTS before recording starts.
+    # The frontend waits for this audio to finish before starting the mic.
+    # ------------------------------------------------------------------
+    from app.db.embeddings import get_user_name_for_phone
+    from app.agent.tts import synthesise_speech, PROMPT_VERIFICATION_FAILED_RETRY
+
+    user_name = get_user_name_for_phone(phone_number)
+    greeting_text = f"Hi {user_name}, how can I help you today?"
+    logger.info(
+        "Sending greeting | phone=%s user_name=%s", phone_number, user_name
+    )
+    greeting_tts = await synthesise_speech(greeting_text)
+    if greeting_tts:
+        await websocket.send_json({
+            "type": "agent_audio",
+            "data": base64.b64encode(greeting_tts).decode(),
+            "is_greeting": True,
+        })
 
     in_agent_mode = False  # flips to True after successful biometric verification
 
@@ -878,18 +893,88 @@ async def websocket_verify_endpoint(websocket: WebSocket, phone_number: str):
                             result["final_status"],
                         )
                         if result["final_status"] == "verified":
-                            # Stay connected — switch to voice-agent mode.
-                            # The AgentSessionCache was already populated by
-                            # _save_session_to_database(); just flip the flag.
+                            # --------------------------------------------------
+                            # Biometric passed: STT the verified chunk, run the
+                            # LangGraph pipeline, and reply via TTS — all before
+                            # flipping in_agent_mode so subsequent audio takes
+                            # the correct path.
+                            # --------------------------------------------------
+                            from app.agent.stt import transcribe_audio
+                            from app.services.voice_agent import process_verified_utterance
+                            import app.agent.session_cache as session_cache_module
+
                             logger.info(
                                 "Switching to agent mode | phone=%s session_id=%s",
                                 phone_number,
                                 session.session_id,
                             )
+
+                            # Ensure the agent cache knows the live send_ws.
+                            session_cache_module.update(
+                                session.session_id, send_ws=websocket.send_json
+                            )
+
+                            # STT the verified chunk and forward it to the agent.
+                            verified_audio = streaming_service.get_session(
+                                session.session_id
+                            ).last_chunk_audio
+                            if verified_audio:
+                                transcription = await transcribe_audio(verified_audio)
+                                if transcription.strip():
+                                    logger.info(
+                                        "Forwarding verified utterance to agent "
+                                        "| phone=%s transcript=%r",
+                                        phone_number,
+                                        transcription,
+                                    )
+                                    await process_verified_utterance(
+                                        client_id=session.session_id,
+                                        transcription=transcription,
+                                        send_ws=websocket.send_json,
+                                    )
+                                else:
+                                    logger.info(
+                                        "Empty transcript for verified chunk "
+                                        "| phone=%s — skipping agent call",
+                                        phone_number,
+                                    )
+                            else:
+                                logger.warning(
+                                    "No last_chunk_audio available for STT "
+                                    "| phone=%s session_id=%s",
+                                    phone_number,
+                                    session.session_id,
+                                )
+
                             in_agent_mode = True
                         else:
                             # Unverified — close the connection gracefully.
                             break
+
+                    elif (
+                        result.get("type") == "chunk_result"
+                        and not result.get("is_match")
+                        and result.get("final_status") is None
+                    ):
+                        # --------------------------------------------------
+                        # Non-final chunk failure: tell the user to try again.
+                        # The frontend stops recording on this chunk_result and
+                        # only restarts once this TTS finishes playing.
+                        # --------------------------------------------------
+                        logger.info(
+                            "Chunk %d failed (non-final) — sending retry prompt "
+                            "| phone=%s session_id=%s",
+                            result.get("chunk_number"),
+                            phone_number,
+                            session.session_id,
+                        )
+                        retry_tts = await synthesise_speech(PROMPT_VERIFICATION_FAILED_RETRY)
+                        if retry_tts:
+                            await websocket.send_json({
+                                "type": "agent_audio",
+                                "data": base64.b64encode(retry_tts).decode(),
+                                "is_retry": True,
+                            })
 
                 elif message.get("text"):
                     try:

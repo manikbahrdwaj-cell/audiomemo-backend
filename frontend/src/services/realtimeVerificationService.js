@@ -12,6 +12,7 @@ export const REALTIME_VERIFICATION_EVENTS = {
   UNVERIFIED: 'realtimeVerification:unverified',
   ERROR: 'realtimeVerification:error',
   CONNECTION_CLOSED: 'realtimeVerification:connection_closed',
+  GREETING_AUDIO: 'realtimeVerification:greeting_audio',
   AGENT_RESPONSE: 'realtimeVerification:agent_response',
   AGENT_THINKING: 'realtimeVerification:agent_thinking',
 };
@@ -291,6 +292,11 @@ class RealtimeVerificationService extends EventEmitter {
       this.emit(REALTIME_VERIFICATION_EVENTS.ERROR, {
         error: message.error,
         message: message.message,
+      });
+    } else if (type === 'greeting_audio') {
+      this.emit(REALTIME_VERIFICATION_EVENTS.GREETING_AUDIO, {
+        audioBase64: message.data || '',
+        text: message.text || '',
       });
     } else if (type === 'agent_audio') {
       this.emit(REALTIME_VERIFICATION_EVENTS.AGENT_RESPONSE, {

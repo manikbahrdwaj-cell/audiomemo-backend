@@ -110,6 +110,20 @@ def get_voice_embedding(phone_number: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def get_user_name_for_phone(phone_number: str) -> str:
+    """Return the user's display name for *phone_number*.
+
+    Looks for a ``name`` field on the voice_embeddings document.  If the field
+    is absent (older enrollments) the phone number itself is returned so callers
+    always get a printable string.
+    """
+    collection = get_database()
+    doc = collection.find_one({"phone_number": phone_number}, {"_id": 0, "name": 1})
+    if doc and doc.get("name"):
+        return str(doc["name"])
+    return phone_number
+
+
 def get_user_id_for_phone(phone_number: str) -> Optional[str]:
     """Return the str(_id) of the voice_embeddings document for *phone_number*.
 

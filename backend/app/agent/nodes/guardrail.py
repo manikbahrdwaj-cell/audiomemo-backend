@@ -44,6 +44,8 @@ Reply with EXACTLY one word — no punctuation, no explanation:
 
 A message is data_query whenever the user (I / me / my) asks about:
   • how much they spent / how many dollars they spent / total spending
+  • spending in a specific month, year, or date range (e.g. "in December 2025",
+    "in the month of December", "last month", "last week", "this year")
   • where they spent money, which merchant, which store
   • what categories they bought in
   • transaction history, purchases, bills, charges, payments
@@ -68,6 +70,15 @@ Examples:
   "How much have I spent in total?"           → data_query
   "How much did I spend on coffee?"           → data_query
   "How much I spent this week?"               → data_query
+  "How much did I spend last month?"          → data_query
+  "How much did I spend in December?"         → data_query
+  "How much did I spend in December 2025?"    → data_query
+  "How much dollars I spent in December 2025?"                  → data_query
+  "How much dollars I spent in the month of December 2025?"     → data_query
+  "How much money did I spend in the month of January?"         → data_query
+  "What is my total spending in November 2025?"                 → data_query
+  "Show all my transactions from December 2025"                 → data_query
+  "What did I buy in the last 3 months?"      → data_query
   "What transactions do I have?"              → data_query
   "Where did I spend my money?"               → data_query
   "Show me my recent purchases"               → data_query

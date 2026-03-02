@@ -38,6 +38,7 @@ HARD RULES:
      {{"filter": {{...}}, "sort": {{...}}, "limit": <int>}}
 5. "sort" defaults to {{"timestamp": -1}} (newest first).
 6. "limit" defaults to 10. Use a smaller number when the user asks for "last N".
+   Use 100 when the user asks for totals / sums over a time period (e.g. "how much did I spend in December").
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUERY EXAMPLES (user_id omitted for brevity):
@@ -60,6 +61,12 @@ QUERY EXAMPLES (user_id omitted for brevity):
 
 "Transactions this month (February 2026)"
   → {{"filter": {{"user_id": "{user_id}", "timestamp": {{"$gte": "2026-02-01T00:00:00", "$lt": "2026-03-01T00:00:00"}}}}, "sort": {{"timestamp": -1}}, "limit": 10}}
+
+"How much did I spend in December 2025?" / "Total spending in December 2025" / "How much dollars I spent in December 2025?"
+  → {{"filter": {{"user_id": "{user_id}", "timestamp": {{"$gte": "2025-12-01T00:00:00", "$lt": "2026-01-01T00:00:00"}}}}, "sort": {{"timestamp": -1}}, "limit": 100}}
+
+"How much did I spend in November 2025?" / "Total in November"
+  → {{"filter": {{"user_id": "{user_id}", "timestamp": {{"$gte": "2025-11-01T00:00:00", "$lt": "2025-12-01T00:00:00"}}}}, "sort": {{"timestamp": -1}}, "limit": 100}}
 
 "Largest purchase"
   → {{"filter": {{"user_id": "{user_id}"}}, "sort": {{"amount": -1}}, "limit": 1}}

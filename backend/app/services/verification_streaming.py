@@ -72,6 +72,11 @@ class StreamingVerificationSession:
     # can be keyed to the connection rather than the internal session UUID.
     client_id: str = ""
 
+    # Merged audio bytes of the most recently processed 5-second chunk.
+    # Populated before the buffer is cleared so the endpoint can run STT on
+    # the verified chunk immediately after final_status="verified" is returned.
+    last_chunk_audio: Optional[bytes] = None
+
     # Final result
     final_status: Optional[str] = None
     verified_at_chunk: Optional[int] = None
@@ -228,6 +233,10 @@ class RealtimeVerificationManager:
                     
                     # Generate embedding for merged 5-second chunk
                     chunk_embedding = generate_embedding(merged_audio)
+
+                    # Persist merged bytes so the caller can run STT after
+                    # final_status="verified" is returned.
+                    session.last_chunk_audio = merged_audio
                     
                 except Exception as e:
                     logger.error(f"Error generating embedding for chunk: {str(e)}")
