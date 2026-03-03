@@ -84,8 +84,25 @@ async def tool_executor(state: AgentState) -> dict:
 
     pymongo is synchronous, so the blocking call is offloaded to a thread via
     ``asyncio.to_thread`` to avoid blocking the event loop.
+
+    If ``generated_sql`` contains the ``__parse_error__`` sentinel (injected by
+    ``query_compiler`` when the LLM output could not be parsed), the node skips
+    the MongoDB call entirely and returns the pre-set ``sql_result`` from state.
     """
     query_json = state["generated_sql"]
+
+    # Short-circuit: parse-error sentinel means query_compiler already set
+    # sql_result to the clarification sentinel; do not touch the database.
+    try:
+        _sentinel = json.loads(query_json)
+        if _sentinel.get("__parse_error__"):
+            logger.info(
+                "[ToolExecutor] Skipping MongoDB — parse_error sentinel detected"
+            )
+            return {"sql_result": state.get("sql_result", '{"__clarify__": true}')}
+    except (json.JSONDecodeError, AttributeError):
+        pass
+
     logger.info("[ToolExecutor] Running MongoDB query: %s", query_json)
 
     try:

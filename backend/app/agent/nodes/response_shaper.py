@@ -23,6 +23,13 @@ _SYSTEM_PROMPT = (
     "If given a JSON error object, apologise briefly without exposing internal details."
 )
 
+# Spoken response when query_compiler could not produce a valid filtered query.
+_CLARIFY_RESPONSE = (
+    "I'm sorry, I didn't quite understand that. Could you please rephrase your "
+    "question? For example, you can ask: how much did I spend at Starbucks, or "
+    "what are my transactions in December."
+)
+
 # Spoken refusal for off-topic questions
 _OFF_TOPIC_RESPONSE = (
     "I can only help with questions about your own transactions and spending history. "
@@ -42,12 +49,16 @@ def build_response_shaper_node(llm) -> Callable[[AgentState], dict]:
     async def node(state: AgentState) -> dict:
         sql_result = state.get("sql_result", "")
 
-        # --- Off-topic short-circuit -------------------------------------------
+        # --- Short-circuit sentinels ------------------------------------------
         try:
             parsed = json.loads(sql_result) if sql_result else None
-            if isinstance(parsed, dict) and parsed.get("off_topic"):
-                logger.info("[ResponseShaper] Off-topic query — returning refusal")
-                return {"messages": [AIMessage(content=_OFF_TOPIC_RESPONSE)]}
+            if isinstance(parsed, dict):
+                if parsed.get("off_topic"):
+                    logger.info("[ResponseShaper] Off-topic query — returning refusal")
+                    return {"messages": [AIMessage(content=_OFF_TOPIC_RESPONSE)]}
+                if parsed.get("__clarify__"):
+                    logger.info("[ResponseShaper] Parse-error sentinel — returning clarification")
+                    return {"messages": [AIMessage(content=_CLARIFY_RESPONSE)]}
         except (json.JSONDecodeError, TypeError):
             pass
 
