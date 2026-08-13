@@ -1,0 +1,60 @@
+{
+  "project_key": "SAUR",
+  "generated_at": "2026-08-13T13:19:45.342821+00:00",
+  "script_directory": "qa-automation",
+  "requested_stages": [
+    "SMOKE",
+    "REGRESSION",
+    "PERFORMANCE"
+  ],
+  "stages": [
+    {
+      "stage": "SMOKE",
+      "order": 0,
+      "test_cases": [
+        {
+          "manual_test_case_item_id": 1,
+          "test_case_id": "TC-004",
+          "test_case_title": "End-to-end: Full cart and checkout flow for a signed-in user",
+          "is_critical": true,
+          "script_path": "smoke/TC-004.py",
+          "framework": "playwright",
+          "language": "python"
+        }
+      ]
+    },
+    {
+      "stage": "REGRESSION",
+      "order": 2,
+      "test_cases": [
+        {
+          "manual_test_case_item_id": 1,
+          "test_case_id": "TC-004",
+          "test_case_title": "End-to-end: Full cart and checkout flow for a signed-in user",
+          "is_critical": true,
+          "script_path": "regression/TC-004.py",
+          "framework": "playwright",
+          "language": "python"
+        }
+      ]
+    },
+    {
+      "stage": "PERFORMANCE",
+      "order": 3,
+      "test_cases": [
+        {
+          "manual_test_case_item_id": 1,
+          "test_case_id": "TC-004",
+          "test_case_title": "End-to-end: Full cart and checkout flow for a signed-in user",
+          "is_critical": true,
+          "script_path": "performance/TC-004.py",
+          "framework": "playwright",
+          "language": "python"
+        }
+      ]
+    }
+  ],
+  "total_test_cases": 3,
+  "skipped_no_script": 0,
+  "skipped_item_ids": []
+}
